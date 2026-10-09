@@ -1,0 +1,378 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Multigrain Companion — UI mockup</title>
+<style>
+:root{
+  --bg:#ffffff; --fg:#1b1d21; --mut:#6b7280; --line:#e5e7eb; --card:#fafafa;
+  --accent:#0e9db3; --sel:#e6f6f8; --sceneA:#2ea043; --sceneB:#e5534b;
+  --live:#c026d3; --warn:#d1870b; --shadow:0 1px 2px rgba(0,0,0,.06);
+}
+@media(prefers-color-scheme:dark){:root{
+  --bg:#15171a; --fg:#e8eaed; --mut:#9aa1ab; --line:#2a2e34; --card:#1b1e22;
+  --accent:#3fd0e0; --sel:#102a2e; --sceneA:#3fb950; --sceneB:#f05d5d;
+  --live:#e879f9; --warn:#e3a008; --shadow:0 1px 2px rgba(0,0,0,.3);
+}}
+*{box-sizing:border-box}
+body{margin:0;font:13px/1.5 -apple-system,system-ui,"Segoe UI",sans-serif;background:var(--bg);color:var(--fg)}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+header{display:flex;align-items:center;gap:14px;padding:12px 18px;border-bottom:1px solid var(--line)}
+header .logo{font-weight:700;font-size:15px}
+header .pill{font-size:12px;color:var(--mut);border:1px solid var(--line);border-radius:999px;padding:2px 10px}
+header .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--sceneA);margin-right:6px;vertical-align:middle}
+header .right{margin-left:auto;color:var(--mut);font-size:12px}
+.note{font-size:11px;color:var(--mut);font-style:italic}
+
+.grid{display:grid;grid-template-columns:230px 1fr 320px;gap:0;height:calc(100vh - 53px - 190px)}
+.col{overflow:auto;padding:14px 16px}
+.col+.col{border-left:1px solid var(--line)}
+h2{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--mut);margin:0 0 10px}
+
+/* sounds */
+.sound{display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:8px;cursor:pointer;margin-bottom:3px}
+.sound:hover{background:var(--card)}
+.sound.on{background:var(--sel);box-shadow:inset 3px 0 var(--accent)}
+.sound .glyph{width:16px;text-align:center}
+.sound .nm{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sound .tag{font-size:10px;color:var(--mut)}
+.sound.empty{opacity:.5}
+.playing{color:var(--sceneA);font-weight:600}
+
+/* morph */
+.morphbox{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:16px;box-shadow:var(--shadow)}
+.scenetabs{display:flex;gap:8px;margin-bottom:10px}
+.scenetab{flex:1;text-align:center;padding:6px;border-radius:7px;border:1px solid var(--line);cursor:pointer;font-weight:600}
+.scenetab.A{color:var(--sceneA)} .scenetab.B{color:var(--sceneB)}
+.scenetab.active{outline:2px solid currentColor}
+.morph-wrap{display:flex;align-items:center;gap:10px}
+.morph-wrap .lab{font-weight:700}
+.morph-wrap .A{color:var(--sceneA)} .morph-wrap .B{color:var(--sceneB)}
+input[type=range]{width:100%}
+.morphpos{text-align:center;color:var(--mut);margin-top:6px;font-size:12px}
+
+/* params */
+.param{display:grid;grid-template-columns:62px 1fr 150px;align-items:center;gap:10px;padding:6px 0;border-bottom:1px dashed var(--line)}
+.param .pk{font-weight:600}
+.param .cur{text-align:right;font-variant-numeric:tabular-nums}
+.bar{position:relative;height:8px;border-radius:5px;background:var(--line);overflow:hidden}
+.bar>i{position:absolute;top:0;bottom:0;background:var(--accent);opacity:.85}
+.bar.bip>i{background:var(--accent)}
+.ab{font-size:11px;color:var(--mut);white-space:nowrap}
+.ab .A{color:var(--sceneA)} .ab .B{color:var(--sceneB)}
+.toggles{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+.tg{font-size:11px;padding:5px 9px;border:1px solid var(--line);border-radius:7px;cursor:pointer;user-select:none}
+.tg.on{background:var(--accent);color:#fff;border-color:transparent}
+
+/* mod matrix */
+table.mod{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+table.mod th,table.mod td{padding:4px 3px;text-align:center;border-bottom:1px solid var(--line)}
+table.mod th:first-child,table.mod td:first-child{text-align:left;color:var(--mut)}
+table.mod input{width:44px;border:1px solid transparent;background:transparent;color:var(--fg);
+  text-align:center;border-radius:5px;font:inherit;font-variant-numeric:tabular-nums}
+table.mod input:hover{border-color:var(--line)}
+table.mod input:focus{border-color:var(--accent);outline:none;background:var(--card)}
+.src-RAND{color:var(--warn)} .src-X{color:#4c8dff} .src-Y{color:var(--sceneA)} .src-Z{color:var(--sceneB)}
+
+/* bottom: sample + waveform */
+.bottom{border-top:1px solid var(--line);padding:12px 18px;height:190px}
+.bottom .row{display:flex;align-items:center;gap:14px;margin-bottom:8px}
+.bottom .fn{font-weight:600}
+svg.wf{width:100%;height:120px;background:var(--card);border:1px solid var(--line);border-radius:10px;display:block}
+.wf .fill{fill:var(--accent);fill-opacity:.8}
+.wf .axis{stroke:var(--line)}
+.wf .mark{stroke:var(--fg);stroke-dasharray:3 3;opacity:.5}
+.wf .mlab{fill:var(--mut);font:10px ui-monospace,monospace}
+.wf .scan{stroke:var(--sceneA);stroke-width:2}
+.wf .wrapzone{fill:var(--accent);fill-opacity:.07}
+.footer{padding:6px 18px 14px;color:var(--mut);font-size:11px;border-top:1px solid var(--line)}
+</style>
+</head>
+<body>
+<header>
+  <span class="logo">Multigrain</span>
+  <span class="pill" id="conn"><span class="dot"></span>USB MIDI: mock</span>
+  <span class="pill">Project 03</span>
+  <span class="pill">Preset "drone2" · v17</span>
+  <span class="right">SYNC ♩=120 · <span class="note">UI mockup — no hardware connected</span></span>
+</header>
+
+<div class="grid">
+  <!-- SOUNDS -->
+  <div class="col">
+    <h2>Sounds</h2>
+    <div id="sounds"></div>
+    <h2 style="margin-top:16px">Recorder</h2>
+    <div class="note" id="recinfo">Looping Recorder · 16 s · THRSH off</div>
+  </div>
+
+  <!-- SCENE / MORPH / PARAMS -->
+  <div class="col">
+    <div class="morphbox">
+      <div class="scenetabs">
+        <div class="scenetab A" data-scene="A">● SCENE A</div>
+        <div class="scenetab B" data-scene="B">SCENE B ●</div>
+      </div>
+      <div class="morph-wrap">
+        <span class="lab A">A</span>
+        <input type="range" id="morph" min="0" max="100" value="62">
+        <span class="lab B">B</span>
+      </div>
+      <div class="morphpos" id="morphpos"></div>
+    </div>
+    <h2>Granular engine <span class="note">(live = morphed A→B)</span></h2>
+    <div id="params"></div>
+    <div class="toggles" id="toggles"></div>
+  </div>
+
+  <!-- MOD MATRIX -->
+  <div class="col">
+    <h2>Modulation matrix <span class="note">per Scene · attenuverter %</span></h2>
+    <table class="mod" id="mod"></table>
+    <p class="note" style="margin-top:12px">RAND = internal random · X/Y/Z = CV inputs.
+       ±100% sweeps the parameter's full range. Click a cell to edit.</p>
+  </div>
+</div>
+
+<!-- SAMPLE + WAVEFORM -->
+<div class="bottom">
+  <div class="row">
+    <span class="fn" id="samplefn">vox.wav</span>
+    <span class="note" id="sampleinfo">44.1 kHz · mono · 3.20 s</span>
+    <span style="margin-left:auto" class="note">START/WRAP/SCAN shown live</span>
+  </div>
+  <svg class="wf" id="wf" viewBox="0 0 1000 120" preserveAspectRatio="none"></svg>
+</div>
+<div class="footer">Static mockup of the companion app. Values are representative;
+  parameter model &amp; preset container are from firmware RE (see PRESET_FORMAT.md).</div>
+
+<script>
+const SHAPES = ["BELL","SINC","TRIANGLE","DECAY","RAMP","TUKEY","SQUARE"];
+const PARAMS = [
+  {k:"START", t:"pct",  grp:"pos"},
+  {k:"WRAP",  t:"pct",  grp:"pos"},
+  {k:"SCAN",  t:"bip",  grp:"pos"},
+  {k:"SHAPE", t:"shape",grp:"grain"},
+  {k:"LEVEL", t:"db",   grp:"grain"},
+  {k:"TONE",  t:"tone", grp:"grain"},
+  {k:"RATE",  t:"hz",   grp:"grain"},
+  {k:"SIZE",  t:"size", grp:"grain"},
+  {k:"PITCH", t:"semi", grp:"grain"},
+  {k:"BLUR",  t:"pct",  grp:"blur"},
+  {k:"REVERSE",t:"bool",grp:"grain"},
+];
+const MODS = ["RAND","X","Y","Z"];
+
+// representative state for 8 sounds
+function mkScene(seed){
+  const r=(n)=>{const x=Math.sin(seed*99.7+n*12.9)*43758.5; return x-Math.floor(x);};
+  return {START:r(1), WRAP:0.4+0.6*r(2), SCAN:(r(3)*2-1)*0.6, SHAPE:Math.floor(r(4)*7),
+          LEVEL:-(r(5)*12), TONE:(r(6)*2-1)*0.7, RATE:r(7)*60, SIZE:0.02+r(8)*2,
+          PITCH:Math.round((r(9)*2-1)*12), BLUR:r(10)*0.6, REVERSE:r(11)>0.6?1:0};
+}
+function mkMod(seed){
+  const m={}; const r=(n)=>{const x=Math.sin(seed*7.3+n*5.1)*2371.1;return x-Math.floor(x);};
+  PARAMS.forEach((p,i)=>{m[p.k]={}; MODS.forEach((s,j)=>{
+    m[p.k][s] = (r(i*4+j)<0.78)?0:Math.round((r(i*4+j+40)*2-1)*100/5)*5;
+  });});
+  return m;
+}
+const sounds = [
+  {name:"vox.wav", kind:"sample", info:"44.1 kHz · mono · 3.20 s"},
+  {name:"drum_loop.wav", kind:"sample", info:"44.1 kHz · stereo · 2.00 s"},
+  {name:"LIVE", kind:"live", info:"Looping Recorder · 16 s"},
+  {name:"pad.wav", kind:"sample", info:"48 kHz · stereo · 4.00 s"},
+  {name:"", kind:"empty"},{name:"", kind:"empty"},
+  {name:"", kind:"empty"},{name:"", kind:"empty"},
+].map((s,i)=>{
+  if(s.kind!=="empty"){ s.A=mkScene(i+1); s.B=mkScene(i+21);
+    s.mod=mkMod(i+1); s.links={rateSize:i%2===0, sizePitch:i===0, pingpong:false}; }
+  return s;
+});
+
+let sel = 0;           // selected sound
+let editScene = "A";   // which scene is being edited
+let morph = 0.62;      // 0..1  (A..B)
+
+/* ---- formatters: given a numeric value in native units ---- */
+const lerp=(a,b,t)=>a+(b-a)*t;
+function fmt(t,v){
+  switch(t){
+    case "pct": return Math.round(v*100)+"%";
+    case "bip": return (v>=0?"+":"")+v.toFixed(2)+(Math.abs(v)<0.03?" (stop)":(v>0?" (fwd)":" (rev)"));
+    case "db":  return v<=-59? "−∞ dB" : (v<=0?"":"+")+v.toFixed(1)+" dB";
+    case "tone":return Math.abs(v)<0.03?"center (bypass)":(v<0?"LP "+Math.round(-v*100)+"%":"HP "+Math.round(v*100)+"%");
+    case "hz":  return v.toFixed(1)+" Hz";
+    case "size":return v<1? Math.round(v*1000)+" ms" : v.toFixed(2)+" s";
+    case "semi":return (v>=0?"+":"")+Math.round(v)+" st";
+    case "shape":return SHAPES[Math.round(v)];
+    case "bool":return v?"on":"off";
+  }
+}
+// bar fill fraction 0..1 and whether bipolar (center origin)
+function barFrac(t,v){
+  switch(t){
+    case "pct": return [v,false];
+    case "bip": case "tone": return [(v+1)/2,true];
+    case "db":  return [(v+60)/60,false];
+    case "hz":  return [v/130.813,false];
+    case "size":return [v/4,false];
+    case "semi":return [(v+24)/48,true];
+    case "shape":return [Math.round(v)/6,false];
+    case "bool":return [v?1:0,false];
+  }
+}
+
+function renderSounds(){
+  const el=document.getElementById("sounds"); el.innerHTML="";
+  sounds.forEach((s,i)=>{
+    const d=document.createElement("div");
+    d.className="sound"+(i===sel?" on":"")+(s.kind==="empty"?" empty":"");
+    const glyph = s.kind==="live"?'<span style="color:var(--live)">◆</span>'
+                : s.kind==="empty"?'·'
+                : (i===sel?'<span class="playing">▸</span>':'●');
+    d.innerHTML=`<span class="glyph">${glyph}</span>
+      <span class="nm">${s.kind==="empty"?"empty":(s.name||"—")}</span>
+      <span class="tag">${i+1}</span>`;
+    if(s.kind!=="empty") d.onclick=()=>{sel=i;renderAll();};
+    el.appendChild(d);
+  });
+}
+
+function morphedVal(p){
+  const s=sounds[sel]; const a=s.A[p.k], b=s.B[p.k];
+  if(p.t==="shape"||p.t==="bool") return {a,b,discrete:true};
+  return {v:lerp(a,b,morph), a,b, discrete:false};
+}
+
+function renderParams(){
+  const el=document.getElementById("params"); el.innerHTML="";
+  const s=sounds[sel];
+  PARAMS.forEach(p=>{
+    const mv=morphedVal(p);
+    const row=document.createElement("div"); row.className="param";
+    let curHtml, barHtml;
+    if(mv.discrete){
+      if(mv.a===mv.b){ curHtml=fmt(p.t,mv.a); }
+      else{
+        const pB=Math.round(morph*100), pA=100-pB;
+        curHtml = `${fmt(p.t,mv.a)} ${pA}% / ${fmt(p.t,mv.b)} ${pB}%`;
+      }
+      barHtml="";
+    }else{
+      const [frac,bip]=barFrac(p.t,mv.v);
+      curHtml=fmt(p.t,mv.v);
+      const pct=Math.max(0,Math.min(1,frac))*100;
+      barHtml = bip
+        ? `<div class="bar bip"><i style="left:${Math.min(50,pct)}%;width:${Math.abs(pct-50)}%"></i></div>`
+        : `<div class="bar"><i style="left:0;width:${pct}%"></i></div>`;
+    }
+    const ab = `<span class="A">${fmt(p.t,mv.a)}</span> → <span class="B">${fmt(p.t,mv.b)}</span>`;
+    row.innerHTML = `<span class="pk">${p.k}</span>
+      <span>${barHtml}<span class="ab">${ab}</span></span>
+      <span class="cur">${curHtml}</span>`;
+    el.appendChild(row);
+  });
+}
+
+function renderToggles(){
+  const s=sounds[sel]; const el=document.getElementById("toggles"); el.innerHTML="";
+  const defs=[["RATE⇄SIZE","rateSize"],["SIZE⇄PITCH","sizePitch"],["PING-PONG","pingpong"]];
+  defs.forEach(([lab,key])=>{
+    const t=document.createElement("span");
+    t.className="tg"+(s.links[key]?" on":""); t.textContent=lab;
+    t.onclick=()=>{s.links[key]=!s.links[key];renderToggles();};
+    el.appendChild(t);
+  });
+}
+
+function renderMod(){
+  const s=sounds[sel]; const el=document.getElementById("mod");
+  let h="<tr><th></th>"+MODS.map(m=>`<th class="src-${m}">${m}</th>`).join("")+"</tr>";
+  PARAMS.forEach(p=>{
+    h+=`<tr><td>${p.k}</td>`+MODS.map(m=>{
+      const v=s.mod[p.k][m];
+      return `<td><input type="number" step="5" min="-100" max="100" value="${v}"
+               data-p="${p.k}" data-m="${m}"></td>`;
+    }).join("")+"</tr>";
+  });
+  el.innerHTML=h;
+  el.querySelectorAll("input").forEach(inp=>{
+    inp.onchange=()=>{ let v=Math.max(-100,Math.min(100,+inp.value||0));
+      s.mod[inp.dataset.p][inp.dataset.m]=v; inp.value=v; };
+  });
+}
+
+/* ---- waveform (deterministic pseudo-random envelope) ---- */
+let scanPhase=0;
+function buildWave(seed){
+  const N=500, pts=[];
+  for(let i=0;i<N;i++){
+    const t=i/N;
+    const env=0.25+0.75*Math.abs(Math.sin(seed+t*7));
+    const x=Math.sin(seed*3+t*180)*env;
+    pts.push(x);
+  }
+  return pts;
+}
+function renderWave(){
+  const s=sounds[sel];
+  const seed=(sel+1)*1.7;
+  const wave=buildWave(seed);
+  const W=1000,H=120,mid=60,n=wave.length,step=W/n;
+  const start=s.kind==="empty"?0:s.A.START, wrap=s.kind==="empty"?1:Math.max(s.A.WRAP,s.A.START+0.05);
+  const sx=start*W, wx=wrap*W;
+  // scan playhead loops between start and wrap, speed ~ RATE
+  const top=wave.map((v,i)=>`${(i*step).toFixed(1)},${(mid-v*mid).toFixed(1)}`).join(" ");
+  const bot=wave.map((v,i)=>`${((n-1-i)*step).toFixed(1)},${(mid+wave[n-1-i]*mid).toFixed(1)}`).join(" ");
+  const scanX = sx + (wx-sx)*scanPhase;
+  const svg=document.getElementById("wf");
+  svg.innerHTML =
+    `<rect class="wrapzone" x="${sx}" y="0" width="${wx-sx}" height="${H}"/>`+
+    `<line class="axis" x1="0" y1="${mid}" x2="${W}" y2="${mid}"/>`+
+    `<polygon class="fill" points="${top} ${bot}"/>`+
+    `<line class="mark" x1="${sx}" y1="0" x2="${sx}" y2="${H}"/>`+
+    `<text class="mlab" x="${sx+3}" y="12">START</text>`+
+    `<line class="mark" x1="${wx}" y1="0" x2="${wx}" y2="${H}"/>`+
+    `<text class="mlab" x="${wx-32}" y="12">WRAP</text>`+
+    (s.kind==="empty"?"":`<line class="scan" x1="${scanX}" y1="0" x2="${scanX}" y2="${H}"/>`+
+      `<text class="mlab" x="${scanX+3}" y="${H-4}" style="fill:var(--sceneA)">SCAN</text>`);
+}
+function animate(){
+  const s=sounds[sel];
+  if(s.kind!=="empty"){
+    const dir = s.A.SCAN>=0?1:-1;
+    const speed = 0.002 + Math.abs(s.A.SCAN)*0.02;
+    scanPhase += dir*speed;
+    if(scanPhase>1) scanPhase-=1; if(scanPhase<0) scanPhase+=1;
+    renderWave();
+  }
+  requestAnimationFrame(animate);
+}
+
+function renderScenes(){
+  document.querySelectorAll(".scenetab").forEach(t=>{
+    t.classList.toggle("active", t.dataset.scene===editScene);
+  });
+  document.getElementById("morphpos").innerHTML =
+    `MORPH ${Math.round(morph*100)}% → ${morph>=.5?'<span style="color:var(--sceneB)">B</span>':'<span style="color:var(--sceneA)">A</span>'} · editing Scene ${editScene}`;
+}
+
+function renderAll(){
+  const s=sounds[sel];
+  document.getElementById("samplefn").textContent = s.kind==="live"?"LIVE memory":(s.name||"—");
+  document.getElementById("sampleinfo").textContent = s.info||"";
+  renderSounds(); renderParams(); renderToggles(); renderMod(); renderScenes(); renderWave();
+}
+
+// wire controls
+document.getElementById("morph").oninput=e=>{morph=+e.target.value/100;
+  editScene = morph>=.5?"B":"A"; renderParams(); renderScenes(); renderWave();};
+document.querySelectorAll(".scenetab").forEach(t=>t.onclick=()=>{editScene=t.dataset.scene;renderScenes();});
+
+renderAll();
+requestAnimationFrame(animate);
+</script>
+</body>
+</html>
