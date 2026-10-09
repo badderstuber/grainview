@@ -32,6 +32,34 @@ Plug the Multigrain into the Mac via USB-C and power it on. Then:
 `mg_monitor.py` decodes + tallies all incoming MIDI (prints a summary on Ctrl-C).
 `mg_probe.py` sends stimulus so you can map stimulus -> response.
 
+## Live state mirror over SWD (the "screen")
+
+The Multigrain has **no USB-MIDI to a computer** (USB-C is firmware-update/DFU
+only) and no MIDI parameter input - confirmed via hardware, firmware strings and
+the manual. The viable path to a live on-screen mirror is reading the module's
+RAM over its **SWD debug port** (the `JTRACE` CoreSight-20 header on the H7
+Backpack), with an ST-Link. The Cortex-M7 reads memory in the background, so the
+core never halts and audio keeps playing. No firmware modification; fully
+reversible. See ../FIRMWARE_MOD_PLAN.md for why this beats patching firmware.
+
+    # discover where a parameter lives in RAM (move ONE knob when prompted):
+    tools/venv/bin/python tools/mg_peek.py --scan 0x24000000 0x8000
+    tools/venv/bin/python tools/mg_peek.py 0x5C001000        # DBGMCU IDCODE (which H7)
+    tools/venv/bin/python tools/mg_peek.py 0x24000100 --float --watch 0.1
+
+Record each discovered address in `tools/mg_addrs.json`, then run the mirror:
+
+    tools/venv/bin/python tools/mg_mirror.py --mock   # test UI now, no hardware
+    tools/venv/bin/python tools/mg_mirror.py          # live, ST-Link attached
+    # open http://localhost:8744/
+
+`mg_peek.py` reads/watches/scans live RAM over SWD without halting (pyOCD +
+ST-Link; `--probes` to list). `mg_mirror.py` polls the `mg_addrs.json` address
+map and serves a live web dashboard (`/state` + `/meta` JSON). `--mock`
+synthesizes moving values so the whole pipeline is verifiable without the probe.
+Hardware chain: ST-Link/V2 -> Olimex ARM-JTAG-20-10 adapter -> 1.27mm 10-pin
+cable -> 2x5 header soldered into JTRACE pins 1-10. Pinout is in mg_peek.py.
+
 ## SD card browser (works without the module)
 
 Scans a Multigrain microSD, parses every WAV, renders waveform envelopes, and
