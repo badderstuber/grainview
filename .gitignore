@@ -1,0 +1,59 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments (recreate from requirements.txt)
+venv/
+.venv/
+env/
+tools/venv/
+
+# --- macOS ---
+.DS_Store
+.AppleDouble
+._*
+.Spotlight-V100
+.Trashes
+
+# --- Editors ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# --- Ghidra reverse-engineering ---
+# Project databases are large/rebuildable; re-import from the .bin instead.
+*.gpr
+*.rep/
+*.lock
+ghidra_proj/
+.ghidra/
+ghidra_*_PUBLIC/
+
+# --- Vendor firmware & docs (Intellijel copyright; keep local, not in git) ---
+*.bin
+*.hex
+*.elf
+*.pdf
+
+# --- Captured from the real SD card (large / copyrighted audio & user data) ---
+*.wav
+*.mgp
+# Generated SD-browser output for a real card:
+card.html
+mock_sd/
+/tmp/mock_sd/
+
+# --- Keep the intentional demo artifacts (override the globs above) ---
+!tools/demo_card.html
+!tools/demo_app.html
+
+# --- Logs / scratch ---
+*.log
+scratch/
+tmp/
