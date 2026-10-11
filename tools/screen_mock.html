@@ -1,0 +1,182 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Multigrain Screen Module — OLED mockups</title>
+<style>
+  body { background:#14171a; color:#c9d2d8; font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;
+         margin:0; padding:28px; }
+  h1 { font-size:17px; font-weight:600; margin:0 0 4px; }
+  .sub { color:#7d8893; margin-bottom:26px; font-size:13px; }
+  .row { display:flex; flex-wrap:wrap; gap:34px; align-items:flex-start; }
+  .panel { background:#1b1f23; border:1px solid #2a3137; border-radius:12px; padding:18px; }
+  .panel h2 { font-size:14px; margin:0 0 2px; }
+  .panel .spec { color:#7d8893; font-size:12px; margin-bottom:12px; }
+  canvas { image-rendering: pixelated; border-radius:6px; display:block;
+           box-shadow:0 0 0 3px #000, 0 6px 22px rgba(0,0,0,.5); background:#000; }
+  .note { color:#8a949c; font-size:12px; margin-top:12px; max-width:260px; }
+  .tag { display:inline-block; font-size:11px; padding:2px 8px; border-radius:20px;
+         background:#223; color:#9fb4c8; margin-top:8px; }
+  footer { color:#5d666d; font-size:12px; margin-top:30px; }
+</style>
+</head>
+<body>
+  <h1>Multigrain "Screen" module — OLED options</h1>
+  <div class="sub">Pixel-accurate. Each is drawn at native resolution, quantized to the panel's
+     grey depth, then scaled up crisp — so this is genuinely how the OLED would look.</div>
+
+  <div class="row">
+    <div class="panel">
+      <h2>A · 1-bit mono</h2>
+      <div class="spec">SSD1306 / SH1106 — 128×64, 0.96–1.3"</div>
+      <canvas id="a"></canvas>
+      <div class="tag">~6–8 HP · exact Digitakt crispness</div>
+      <div class="note">Razor-sharp, no shading. Waveform fills solid white — pixel-art look.
+        Cheapest, most "classic Elektron".</div>
+    </div>
+
+    <div class="panel">
+      <h2>B · 16-level greyscale</h2>
+      <div class="spec">SSD1327 — 128×128, 1.5" square</div>
+      <canvas id="b"></canvas>
+      <div class="tag">~8–10 HP · compact + shading</div>
+      <div class="note">Grey levels give soft waveform fill + anti-aliased text. Square format
+        fits more rows. My recommendation for a compact module.</div>
+    </div>
+
+    <div class="panel">
+      <h2>C · 16-level greyscale</h2>
+      <div class="spec">SSD1322 — 256×64, 3.12" wide</div>
+      <canvas id="c"></canvas>
+      <div class="tag">~14–18 HP · the showpiece</div>
+      <div class="note">The boutique-synth wide display. Cinematic waveform, gorgeous — but eats
+        rack space.</div>
+    </div>
+  </div>
+
+  <footer>Representative "SOUND 1" view: title + waveform (START/WRAP markers, SCAN playhead) +
+     live params. Greys quantized to the real panel depth.</footer>
+
+<script>
+// ---- shared: a plausible grain-sample envelope (0..1), length n ----
+function makeWave(n){
+  const a = new Array(n);
+  for(let i=0;i<n;i++){
+    const t = i/n;
+    const env = Math.pow(Math.sin(Math.PI*t), 0.6);              // overall shape
+    const body = 0.55 + 0.45*Math.sin(2*Math.PI*7*t + 1.3);      // slow undulation
+    const detail = 0.5 + 0.5*Math.sin(2*Math.PI*43*t);           // fine grain
+    const burst = (t>0.33 && t<0.42) ? 1.0 : 0.0;                // a transient
+    a[i] = Math.min(1, env*(0.75*body + 0.25*detail) + burst*0.4*env);
+  }
+  return a;
+}
+
+// draw a filled waveform into rect (x,y,w,h), centred, grey-shaded
+function waveform(ctx, x, y, w, h, startF, wrapF, scanF){
+  const n = w, wav = makeWave(n), mid = y + h/2;
+  for(let i=0;i<n;i++){
+    const amp = wav[i]*(h/2-1);
+    const inWin = (i/n)>=startF && (i/n)<=wrapF;
+    // body fill mid-grey, brighter if inside the START..WRAP window
+    ctx.fillStyle = inWin ? 'rgb(150,150,150)' : 'rgb(70,70,70)';
+    ctx.fillRect(x+i, mid-amp, 1, amp*2);
+    // bright crest pixels
+    ctx.fillStyle = inWin ? 'rgb(255,255,255)' : 'rgb(150,150,150)';
+    ctx.fillRect(x+i, mid-amp, 1, 1);
+    ctx.fillRect(x+i, mid+amp-1, 1, 1);
+  }
+  // START / WRAP markers (bright vertical)
+  ctx.fillStyle='rgb(255,255,255)';
+  ctx.fillRect(x+Math.round(startF*w), y, 1, h);
+  ctx.fillRect(x+Math.round(wrapF*w),  y, 1, h);
+  // SCAN playhead (dashed)
+  const px = x+Math.round(scanF*w);
+  for(let yy=y; yy<y+h; yy+=2) ctx.fillRect(px, yy, 1, 1);
+}
+
+function text(ctx, s, x, y, px, bright, bold){
+  ctx.fillStyle = 'rgb('+bright+','+bright+','+bright+')';
+  ctx.font = (bold?'bold ':'') + px + 'px ui-monospace, Menlo, monospace';
+  ctx.textBaseline='top';
+  ctx.fillText(s, x, y);
+}
+function box(ctx,x,y,w,h,on){ ctx.fillStyle = on?'rgb(255,255,255)':'rgb(60,60,60)';
+  ctx.fillRect(x,y,w,1); ctx.fillRect(x,y+h-1,w,1); ctx.fillRect(x,y,1,h); ctx.fillRect(x+w-1,y,1,h); }
+
+// labelled value cell, Elektron-ish; sel => inverted
+function cell(ctx,x,y,w,h,label,val,sel){
+  if(sel){ ctx.fillStyle='rgb(230,230,230)'; ctx.fillRect(x,y,w,h); }
+  text(ctx,label,x+3,y+2,7, sel?30:120,false);
+  text(ctx,val,x+3,y+h-11,10, sel?20:255,true);
+}
+
+// ---- per-resolution layouts ----
+function drawMono128x64(ctx){
+  text(ctx,'S1',2,1,9,255,true);
+  text(ctx,'VOX.WAV',128-7*7,2,7,160,false);
+  waveform(ctx, 2, 13, 124, 28, 0.18, 0.72, 0.46);
+  const cw=42;
+  cell(ctx,1,45,cw,18,'SIZE','240',false);
+  cell(ctx,43,45,cw,18,'PITCH','+7',true);
+  cell(ctx,85,45,cw,18,'RATE','12Hz',false);
+}
+
+function drawGrey128x128(ctx){
+  text(ctx,'SOUND 1',3,2,11,255,true);
+  text(ctx,'vox.wav',128-8*6,5,8,150,false);
+  ctx.fillStyle='rgb(60,60,60)'; ctx.fillRect(0,16,128,1);
+  waveform(ctx, 3, 20, 122, 48, 0.18, 0.72, 0.46);
+  // 2x3 param grid
+  const labels=[['START','0.18'],['WRAP','0.72'],['SCAN','+.04'],
+                ['SIZE','240ms'],['PITCH','+7'],['RATE','12.4']];
+  const cw=42, ch=22, gx=1, gy=74;
+  for(let i=0;i<6;i++){
+    const cx=gx+(i%3)*cw, cy=gy+Math.floor(i/3)*ch;
+    cell(ctx,cx,cy,cw-1,ch-1,labels[i][0],labels[i][1], i===4);
+  }
+  // MORPH bar
+  text(ctx,'MORPH',3,120,7,120,false);
+  box(ctx,44,120,80,7,false); ctx.fillStyle='rgb(220,220,220)'; ctx.fillRect(45,121,Math.round(80*0.62),5);
+}
+
+function drawGrey256x64(ctx){
+  text(ctx,'SOUND 1',3,2,11,255,true);
+  text(ctx,'vox.wav',92-8*6,5,8,150,false);
+  ctx.fillStyle='rgb(60,60,60)'; ctx.fillRect(92,0,1,64);
+  // left: three stacked big values
+  cell(ctx,2,18,86,14,'SIZE','240ms',false);
+  cell(ctx,2,33,86,14,'PITCH','+7 st',true);
+  cell(ctx,2,48,86,14,'MORPH','0.62',false);
+  // right: wide cinematic waveform
+  waveform(ctx, 96, 4, 158, 56, 0.18, 0.72, 0.46);
+}
+
+// ---- render: native -> quantize -> scale up crisp ----
+function tint(l){ return l; } // neutral white OLED
+function render(id, W, H, levels, drawFn, scale){
+  const off = document.createElement('canvas'); off.width=W; off.height=H;
+  const octx = off.getContext('2d');
+  octx.fillStyle='#000'; octx.fillRect(0,0,W,H);
+  drawFn(octx);
+  const img = octx.getImageData(0,0,W,H), d=img.data;
+  for(let i=0;i<d.length;i+=4){
+    let lum = 0.299*d[i]+0.587*d[i+1]+0.114*d[i+2];
+    let q;
+    if(levels===2) q = lum>80?255:0;
+    else q = Math.round(lum/255*(levels-1))/(levels-1)*255;
+    // slight cool-white OLED tint
+    d[i]=Math.round(q*0.92); d[i+1]=Math.round(q*0.98); d[i+2]=q;
+  }
+  octx.putImageData(img,0,0);
+  const c=document.getElementById(id); c.width=W*scale; c.height=H*scale;
+  const cx=c.getContext('2d'); cx.imageSmoothingEnabled=false;
+  cx.drawImage(off,0,0,W*scale,H*scale);
+}
+
+render('a',128,64,2,  drawMono128x64, 4);
+render('b',128,128,16,drawGrey128x128,4);
+render('c',256,64,16, drawGrey256x64, 3);
+</script>
+</body>
+</html>

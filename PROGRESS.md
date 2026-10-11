@@ -5,7 +5,38 @@ Multigrain** (3U granular sampler) — it's hard to use without a screen and the
 audio-file workflow is confusing. This file is the single place to pick the
 project back up if I lose the chat session.
 
-_Last updated: 2026-10-09._
+_Last updated: 2026-10-11._
+
+---
+
+## Update 2026-10-11 — interactive control proven + module direction set
+
+- **Function-calls over SWD WORK** (`tools/mg_call.py`): halt → set registers →
+  run a firmware function → catch return → restore → resume. Tested the SD
+  dir-scan `FUN_0801f0d4()` live: returned cleanly, module kept running. This
+  unlocks *driving* the module with its own code — no firmware mod.
+- **Ghidra located the file/sound functions** (overnight job → `GHIDRA_FINDINGS.md`,
+  callers → `GHIDRA_CALLERS.md`):
+  - WAV loader entry: **`FUN_08012b24(wav_index)`** (calls `FUN_08026754(index,
+    target)`; target buffer = `0x24020b84`).
+  - Dir scan: `FUN_0801f0d4()`. File list in RAM: names at **`0x30008800`**
+    (0x100 each), count at **`0x240272d8`** → `tools/mg_sd.py` reads it.
+  - Sounds array at struct base `+0x58c`, `0x9f0` stride.
+- **NOT yet done (needs hardware; Leo's power supply was missing):** run
+  `mg_sd.py`, test `FUN_08012b24` load into a scratch slot, find "select active
+  sound", map Scene A/B raw arrays, write-back strategy.
+- **Endgame direction chosen (Leo's idea):** a dedicated **"GRAINVIEW" screen
+  eurorack module** — RP2040 + **128×128 greyscale OLED (SSD1327)** + push-encoder
+  + 4 buttons, **8 HP**, bus-powered, 4-wire SWD ribbon to JTRACE. The Pico is the
+  SWD master running our read+call logic; Multigrain unmodified. Dev path:
+  breadboard Pico first, then KiCad PCB. Pico W can also serve the web app over
+  WiFi as an optional big-screen view. See ROADMAP.md Phase 3.
+- **Mockups built (no hardware):** `tools/screen_mock.html` (OLED options
+  compared), `tools/panel_mock.html` (8 HP panel to scale with live screen).
+- **Day-job framework (`.claude/`):** bootstrap **deferred** — it's TDD/web-shaped
+  and this phase is exploratory RE/hardware. Revisit when building the firmware/web
+  app. Context clear/restore handled by memory + this file + `/clear` (no framework
+  needed).
 
 ---
 
@@ -122,6 +153,59 @@ libusb (`libusb-package`), so no Homebrew needed for the ST-Link.
 6. Later: wire `demo_app.html` to `/state`, and (optional) add write-back /
    inbound control via a USB-MIDI bridge into the module's host port, or the
    fuller firmware mod in FIRMWARE_MOD_PLAN.md.
+
+## Overnight job (started 2026-10-10 night)
+
+Running Ghidra headless to locate the **SD/file/sound functions** for the live
+write-back path (#2: call firmware functions over SWD). Anchor strings in the
+firmware pin them: `SD: Loading %s (%d bytes)...` (WAV loader), `SD: Scan
+/Wavs...` / `SD: /Wavs has %d wav(s).` (dir scan/list), `SD: Collect Sound %d:`
+(slot assignment). Output -> `GHIDRA_FINDINGS.md` (decompiled functions +
+callees). Scripts in `ghidra_proj/` (gitignored): `mg_setup.py` (H7 memory map +
+vector seeding), `mg_find_sd.py` (anchor search + decompile). Log:
+`ghidra_proj/analyze.log`.
+
+### RESULTS (job done, exit 0 — full decompile in GHIDRA_FINDINGS.md, 194 KB)
+
+Target functions located (STM32H753, base 0x08000000, Thumb — OR the entry
+address with 1 when calling):
+
+| Function | Role | Args (from decompile) |
+|---|---|---|
+| **FUN_0801f0d4** | **Directory scan of /Multigrain/Wavs -> builds file list** | none (uses globals). `f_opendir` via FUN_080522b8. |
+| **FUN_08026754** | **Load WAV by index into a sound** (best "load into slot" candidate) | `(uint index, int target)` — builds filename from index+1, logs "Loading %s". |
+| FUN_08024414 | Load serialized state/preset into target | `(char* filename, void* target)` — f_open + reader FUN_08023aec. |
+| FUN_080277ac | Load project/preset | `(void* target)` — different log fmt. |
+| FUN_0801e104 | "Collect Sound" = project-SAVE gather (copies sound WAVs) | `(int struct_base, char* outbuf)`. Confirms **sounds array at base+0x58c**. |
+
+FatFs helpers identified: FUN_080510f0 = f_open(fil,path,mode); FUN_080513f8 =
+f_read; FUN_08051884 = f_write; FUN_08051d88 = f_close; FUN_080522b8 = f_opendir;
+FUN_08023aec = deserialize/reader; FUN_0804cb68 = printf-style logger.
+Global struct base ~0x20000000; sounds at +0x58c (matches our live RAM — the
+0x200005fc param array is sound 0's current block).
+
+**Morning next steps (needs hardware + you):**
+1. Confirm arg semantics by reading the CALL SITES of FUN_0801f0d4 /
+   FUN_08026754 (Ghidra xrefs — can re-run headless with an xref script, or just
+   inspect what regs are set before the call).
+2. Build an **SWD function-call helper** (pyocd: halt, set r0..r3 = args,
+   LR = a return-catch breakpoint addr, PC = entry|1 (Thumb), resume, wait for
+   halt at LR, read r0 = return, restore context + resume). Brief audio pause
+   during the call is fine for load actions.
+3. **Safest first test: call FUN_0801f0d4() (dir scan, NO args)** — lowest risk,
+   validates the whole function-call mechanism; verify by reading the refreshed
+   file list from RAM. THEN try FUN_08026754(index, target) to load a WAV.
+4. Wire into the web UI. Card stays in the module throughout.
+
+Risks: wrong ABI/args can hang the firmware (recover with Boot-button reset /
+power cycle — no brick risk). Start with the no-arg dir scan.
+
+## State of live read (DONE)
+
+Full live mirror works: `tools/mg_mirror.py` + `tools/mg_addrs.json` (11 knobs
+mapped, verified). `tools/mg_peek.py` has read/--watch/--scan/--find/--map/--set.
+Writing current-value slots gets clobbered (knobs are authoritative) - see memory
+note; that's why write-back goes via firmware function-calls, not memory pokes.
 
 ## Repo / session
 

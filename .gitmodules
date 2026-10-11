@@ -1,0 +1,3 @@
+[submodule ".claude"]
+	path = .claude
+	url = https://bitbucket.org/bridgebee/claude-framework.git

@@ -46,6 +46,13 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
+DECODERS = {
+    "u8": ("<B", 1), "i8": ("<b", 1),
+    "u16": ("<H", 2), "i16": ("<h", 2),
+    "u32": ("<I", 4), "i32": ("<i", 4),
+    "f32": ("<f", 4),
+}
+
 
 def parse_addr(s):
     return int(s, 0)
@@ -100,6 +107,41 @@ def decode_word(data):
     i = struct.unpack("<i", data[:4])[0]
     f = struct.unpack("<f", data[:4])[0]
     return f"u32={u}  (0x{u:08x})  i32={i}  f32={f!r}"
+
+
+def cmd_set(target, addr, type_, value, hold):
+    """Write a value over SWD (no halt) and read it back. With --hold, keep
+    re-writing to fight any per-frame firmware recompute."""
+    fmt, size = DECODERS[type_]
+    val = float(value) if type_ == "f32" else int(value, 0)
+    data = struct.pack(fmt, val)
+    before = read_bytes(target, addr, size)
+    target.write_memory_block8(addr, list(data))
+    after = read_bytes(target, addr, size)
+    print(f"0x{addr:08x}  {before.hex()} -> wrote {data.hex()} -> now {after.hex()}")
+    if after != data:
+        print("  write did NOT stick - firmware overwrote it (re-derived value).")
+    else:
+        print("  write landed. Watching 2s to see if it holds...")
+    # observe whether it holds / what happens
+    import time as _t
+    t0 = _t.time()
+    if hold:
+        print(f"  HOLDING: re-writing every {hold}s. Ctrl-C to stop.")
+        try:
+            while True:
+                target.write_memory_block8(addr, list(data))
+                _t.sleep(hold)
+        except KeyboardInterrupt:
+            print("\n  released.")
+        return
+    while _t.time() - t0 < 2.0:
+        cur = read_bytes(target, addr, size)
+        if cur != after:
+            print(f"  +{_t.time()-t0:.2f}s changed to {cur.hex()} "
+                  f"({decode_word(cur.ljust(4, b'0'))})")
+            after = cur
+        _t.sleep(0.1)
 
 
 def _group(offs):
@@ -270,6 +312,12 @@ def main():
                     help="comma-separated knob names for --map")
     ap.add_argument("--out", default=os.path.join(HERE, "mg_addrs.json"),
                     help="--map output file (default tools/mg_addrs.json)")
+    ap.add_argument("--set", nargs=2, metavar=("ADDR", "VALUE"),
+                    help="write VALUE to ADDR (no halt), then watch if it holds")
+    ap.add_argument("--type", default="f32", choices=list(DECODERS),
+                    help="data type for --set (default f32)")
+    ap.add_argument("--hold", type=float, metavar="SEC",
+                    help="with --set, keep re-writing every SEC to fight recompute")
     ap.add_argument("--probes", action="store_true", help="list connected probes and exit")
     ap.add_argument("--freq", type=int, default=4_000_000, help="SWD clock Hz (default 4e6)")
     args = ap.parse_args()
@@ -278,12 +326,16 @@ def main():
         list_probes()
         return
 
-    if not args.scan and not args.find and not args.map and args.addr is None:
-        ap.error("give an address, or --scan/--find/--map ADDR LEN, or --probes")
+    if (not args.scan and not args.find and not args.map and not args.set
+            and args.addr is None):
+        ap.error("give an address, or --scan/--find/--map/--set, or --probes")
 
     session = connect(args.freq)
     try:
         target = session.target
+        if args.set:
+            cmd_set(target, parse_addr(args.set[0]), args.type, args.set[1], args.hold)
+            return
         if args.map:
             names = [n.strip() for n in args.names.split(",") if n.strip()]
             cmd_map(target, parse_addr(args.map[0]), parse_addr(args.map[1]),
