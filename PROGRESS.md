@@ -64,7 +64,56 @@ _Last updated: 2026-10-11._
     **HARDWARE-TESTED 2026-10-11 ✅:** Sound 4 <- [10] leo-bangla-stabs.wav,
     r0=1 in 0.08 s, sound plays it, cursor 10, module fine. Current-sound byte
     confirmed against front panel.
-- **NOT yet done:** *set* active sound (load into any sound, not just selected), map Scene
+- **Sound focus vs playback (2026-10-11):** `FUN_08011980(n)` = set *edit
+  focus* (reactive setter on `0x24025b30`) — tested: knobs/bright LED move, old
+  sound keeps playing. Real button = `FUN_08030e4c`: focus + (if loaded)
+  `FUN_0801b4fc(n)` (immediate if input #7 held / repeat, else queued via
+  page+8 = n+0xe, presumably for release). **`FUN_0801b4fc` is NOT "play"**:
+  loaded → `FUN_08012494(n, b)` copies a block of params into sound n from a
+  2nd table @ `0x24025c60` indexed by b (= sound+0x945, 0/1 — scene?); empty →
+  opens browser. A `--play` built on it did nothing audible; removed.
+  `mg_load.py --sound N` = focus only.
+- **Playing sound found (2026-10-11)** via `mg_peek --find` (RAM diff while
+  pressing real buttons) + new **`tools/mg_watch.py`** (DWT write-watchpoint →
+  prints the writing code): playing sound = u32 **`0x20008c70`** (engine state
+  `0x20008c5c` +0x14, mirror +0x1c). Written by engine tick `FUN_0801a49c`:
+  `if (events & (1<<3)) playing = selected` (+ has-audio checks). Events word
+  `0x240441b8`, posted by `FUN_0802a25c(n)` (atomic |= 1<<n), fetched+cleared
+  each tick by `FUN_0802a2c4`. Audio voices hold sound-struct ptrs at
+  `0x200003b8` / `0x200006a0` (2 voices — crossfade?). `mg_load.py --play` =
+  post event 3 after select — **HARDWARE-TESTED ✅** (playback + LED follow).
+- **Halts glitch audio** (any halt > audio buffer period; even lean 8-reg
+  batched save/restore is audible). So: **prefer plain RAM writes while
+  running.** Halt-free select = write u8 `0x24025b30` (+ notify's side step
+  state+0x11 = state+0x08); skipped the UI page's vtable+0x40 "sound changed"
+  call — tested: LEDs move instantly, knobs edit the new sound, nothing odd.
+  Halt-free play = set bit 3 of events `0x240441b8` (only when word is 0).
+  Now `mg_load.py` default; `--halt-select` = old setter call. Select notify =
+  std::function @ `0x24024b84+0xf9c` (invoker `0x0800bde0`).
+  **WAV load still needs a call (halt → glitch).** Panel loads (ALT → folder,
+  ‹prev/next›) are clean; panel buttons are raw GPIO reads (`FUN_0802c818`) so
+  can't be injected. Shrunk to **one halt**: catch idle loop, set r0/r1, LR =
+  idle-loop top (`0x0800ba9a`), PC = `FUN_0803e710`, resume — function returns
+  straight into main's loop (AAPCS keeps r4/r5; loop holds nothing in r0-r3),
+  completion confirmed by RAM polling. Measured **~16 ms** halted (ST-Link USB
+  round-trips) → still a small blip. **On the Pico (direct SWD, no USB) the same
+  halt is ~tens of µs → expected inaudible.** Accepted for dev; verify on Pico.
+  (Fully halt-free option parked: RAM VTOR copy + DebugMon via FPB breakpoint on
+  the idle loop + RAM trampoline — fiddly, SD-corruption risk if wrong.)
+  `--halt-load` = old two-halt path.
+- **Scene A/B mapped + write-back WORKS (2026-10-11, hardware-verified):**
+  Sound n struct `0x24020b84 + n*0x9f0`: **Scene A** floats at +0x48 START,
+  +0x4c SCAN, +0x50 WRAP, +0x54 SIZE, +0x58 RATE, +0x5c PITCH, +0x60 LEVEL,
+  +0x64 TONE, +0x68 SHAPE, +0x80 BLUR (same layout as live block @0x200005fc);
+  **Scene B = A + 0x264**. MORPH at B → live == B (LEVEL/TONE differ = modulation
+  on top). Knobs write straight into the stored scene values. **Plain RAM write
+  of a stored value = engine follows within a tick, not overwritten unless a
+  knob moves; no halt, no glitch** — Leo heard SIZE 0↔0.5 toggling.
+  New **`tools/mg_param.py`** (table / one sound / set / `--wiggle` A-B test).
+  **Knob takeover = JUMP** (touching a knob snaps the param to the knob's
+  position; app values last until a knob moves). Open: does autosave persist writes,
+  other per-scene params (mod matrix etc.) beyond these 10.
+- **NOT yet done:** map Scene
   A/B raw arrays, write-back strategy.
 - **Endgame direction chosen (Leo's idea):** a dedicated **"GRAINVIEW" screen
   eurorack module** — RP2040 + **128×128 greyscale OLED (SSD1327)** + push-encoder

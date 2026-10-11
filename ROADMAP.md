@@ -45,9 +45,9 @@ phone/desktop app. It does the SWD talking; the module is never modified.
 - [x] **Read SD file list** through the module (`mg_sd.py`) — names + indices. *(hardware-tested 2026-10-11: 11 files, indices 0–10)*
 - [x] **Load a WAV into the selected sound** — `tools/mg_load.py` via front-panel routine `FUN_0803e710` (hardware-tested 2026-10-11). (`FUN_08012b24` = *load Preset(n+1).mgp*.)
 - [ ] **Load preset N** via `FUN_08012b24(N-1)` — verify on a scratch project with an existing preset.
-- [ ] Find **"select active sound"** function/state so loads can target a chosen slot.
-- [ ] Map **Scene A / Scene B raw arrays** (we currently read the morphed "current" values) for per-scene display/edit.
-- [ ] Figure out **patch write-back** (write inactive scene, or call setter fns) — the clean way to send values without fighting the knobs.
+- [x] **Select sound** (focus, `FUN_08011980`) + **switch playback** (engine event 3) — `mg_load.py --sound N [--play]`, hardware-tested 2026-10-11.
+- [x] Map **Scene A / Scene B raw arrays** — sound struct +0x48.. (A), +0x264 (B); `tools/mg_param.py` (2026-10-11).
+- [x] **Patch write-back** — plain RAM write to the stored scene value; engine follows, no halt (2026-10-11). Knobs JUMP on touch (no pickup). Still to check: autosave persistence.
 - [ ] Nice-to-haves: trigger record, save/load project, read slot→file assignments (Sound structs @ base+0x58c, 0x9f0 stride).
 - [ ] Real **unit conversions**: RATE→Hz, SIZE→ms/s, PITCH→semitones, TONE→%, SHAPE→name.
 
@@ -89,6 +89,11 @@ web app over WiFi as an optional big-screen view.)
 - **Interaction model:** encoder turn = page views / navigate; push = dive-in /
   select; BACK = up a level; SOUND‹› & SCENE A/B are global (apply across views);
   FILE opens the SD browser overlay. No long-press / chords (keep it obvious).
+- **Focus vs playback (decided 2026-10-11):** SOUND‹› moves *edit focus* only
+  (`FUN_08011980`) — playing sound keeps going, so you can browse/load/tweak
+  another sound silently. SET option **"Select also plays"** (default OFF) adds
+  the button-press action (`FUN_0801b4fc`). Firmware separates the two too:
+  bright-green LED = focus, fading LED = playing.
 - **Power:** rack bus +12 V → 3.3 V; VTREF sensed from Multigrain; shared GND.
 - **Link:** 4-wire SWD ribbon (SWDIO/SWCLK/GND/VTREF) to Multigrain JTRACE, on the back.
 - **Mockups / spec:** `tools/grainview_emulator.html` (interactive UX = firmware
@@ -108,7 +113,7 @@ push rotary encoder · 6 tactile buttons · 2 LEDs · eurorack power (+12V→3V3
 1. ~~`mg_sd.py` → confirm real WAV list reads out.~~ ✅
 2. ~~Restore the project blanked by the bad preset-load test.~~ ✅ (reloaded its preset)
 3. ~~Find the real WAV-into-sound loader.~~ ✅ `mg_load.py`
-4. Find "select active sound" so we can target a specific slot.
+4. ~~Select sound / switch playback.~~ ✅ `mg_load.py --sound N --play`
 
 ## Open questions
 - Phone app: responsive **web app served by the bridge** (recommended) vs native?

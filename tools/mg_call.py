@@ -55,25 +55,33 @@ def connect(freq_hz):
 
 CORE_REGS = ["r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9",
              "r10", "r11", "r12", "sp", "lr", "pc", "xpsr"]
+# AAPCS: a called function preserves r4-r11/sp, so when we inject at a point
+# where scratch regs are dead (main idle loop) only these need restoring.
+# Fewer USB round-trips = shorter halt = less audio glitch.
+LEAN_REGS = ["r0", "r1", "r2", "r3", "r12", "lr", "pc", "xpsr"]
 
 
-def swd_call(target, func, args, catch, timeout):
+def swd_call(target, func, args, catch, timeout, lean=False):
     from pyocd.core.target import Target
+    t_halt = time.time()
     target.halt()                        # must halt before reading core regs
-    # save full context so we can put the module back exactly as it was
-    saved = {r: target.read_core_register(r) for r in CORE_REGS}
-    print("  saved context: pc=0x%08x sp=0x%08x lr=0x%08x"
-          % (saved["pc"], saved["sp"], saved["lr"]))
+    # save context so we can put the module back exactly as it was
+    regs = LEAN_REGS if lean else CORE_REGS
+    saved = target.read_core_registers_raw(regs)
+    saved = dict(zip(regs, saved))
+    print("  saved context: pc=0x%08x lr=0x%08x"
+          % (saved["pc"], saved["lr"]))
     bp_set = False
     try:
-        for i, a in enumerate(args[:4]):
-            target.write_core_register("r%d" % i, a & 0xFFFFFFFF)
         bp_set = target.set_breakpoint(catch)
         if not bp_set:
             print("  WARN: could not set breakpoint at catch addr")
-        target.write_core_register("lr", catch | 1)     # Thumb return
-        target.write_core_register("pc", func | 1)       # Thumb entry
-        target.write_core_register("xpsr", saved["xpsr"] | (1 << 24))  # T bit
+        names = ["r%d" % i for i in range(len(args[:4]))] + ["lr", "pc", "xpsr"]
+        vals = [a & 0xFFFFFFFF for a in args[:4]] + [
+            catch | 1,                       # Thumb return
+            func | 1,                        # Thumb entry
+            saved["xpsr"] | (1 << 24)]       # T bit
+        target.write_core_registers_raw(names, vals)
         print("  calling 0x%08x(%s) ..."
               % (func, ", ".join("0x%x" % a for a in args)))
         target.resume()
@@ -90,7 +98,7 @@ def swd_call(target, func, args, catch, timeout):
                 print("  halted at 0x%08x (not the catch addr) after %.2fs"
                       % (pc, time.time() - t0))
                 return None
-            time.sleep(0.01)
+            time.sleep(0.001)
         print("  TIMEOUT after %.1fs - function did not return." % timeout)
         target.halt()
         print("  halted at pc=0x%08x" % target.read_core_register("pc"))
@@ -101,16 +109,20 @@ def swd_call(target, func, args, catch, timeout):
                 target.remove_breakpoint(catch)
             except Exception:
                 pass
-        for r, v in saved.items():
-            try:
-                target.write_core_register(r, v)
-            except Exception:
-                pass
+        try:
+            target.write_core_registers_raw(list(saved), list(saved.values()))
+        except Exception:
+            for r, v in saved.items():
+                try:
+                    target.write_core_register(r, v)
+                except Exception:
+                    pass
         try:
             target.resume()
         except Exception:
             pass
-        print("  context restored, module resumed.")
+        print("  context restored, module resumed (halted %.0f ms total)."
+              % ((time.time() - t_halt) * 1000))
 
 
 def main():
