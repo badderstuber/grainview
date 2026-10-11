@@ -128,6 +128,29 @@ _Last updated: 2026-10-11._
   Boot quirk: physical knob positions get applied to the edited scene at boot.
   Open:
   other per-scene params (mod matrix etc.) beyond these 10.
+- **Mod matrix mapped + writable (2026-10-11, hardware-verified):** 4 sources
+  **RAND, X, Y, Z** (RAND = click RAND then turn a knob; X/Y/Z = CV ins), depth
+  per scene. In each scene block: source k block at +0x9c + k*0x48 =
+  [u32 flag = any non-zero depth][depth floats, same layout as params: START
+  +0x00 … SIZE +0x0c, PITCH +0x14, TONE +0x1c, BLUR +0x38]; i.e.
+  depth = scene + 0xa0 + k*0x48 + (param_off − 0x48). Bipolar −1..1. Panel
+  clears the flag when a source has no depths left. `mg_param.py --sound N`
+  shows the matrix; `--mod SRC PARAM V` writes it (keeps flag, marks dirty) —
+  RAND→SIZE 1.0 audibly randomized, 0 settled ✅.
+- **Panel LED sync (2026-10-11, hardware-verified):** the panel draws knob
+  LEDs from per-knob **virtual values** (u32 floats 0..1, bipolar v as (v+1)/2)
+  at `0x240436b0` START, b4 WRAP, b8 SCAN, bc SHAPE, c0 BLUR, c4 LEVEL, c8 RATE,
+  cc SIZE, d0 PITCH, d4 TONE — loaded on mode entry, moved by knobs, NOT
+  re-read from the stored values (so our writes didn't show until mode re-entry).
+  Writing the virtual value updates the LED live and does NOT change the param.
+  UI page ptr `0x20008cc0`: `0x24020b48` = normal, `0x24045210` = mod mode
+  (RAND/X/Y/Z; source u32 @ page+0x10, 0-3). **Edited scene** u8 `0x24025b48`
+  (1 = B) — separate from MORPH (what you hear)! Mod modes time out back to
+  normal; depths unaffected. Mod knob handler `FUN_0803779c` (vtable slot of the
+  mod page) memcpys a 0x48 source block, callback only marks dirty.
+  `mg_param.py` now syncs the LED when the panel shows the written value
+  (same sound + edited scene + mode/source) — yellow↔purple confirmed ✅.
+  UX note: app/GRAINVIEW must show *edited* scene and *heard* (MORPH) separately.
 - **NOT yet done:** map Scene
   A/B raw arrays, write-back strategy.
 - **Endgame direction chosen (Leo's idea):** a dedicated **"GRAINVIEW" screen

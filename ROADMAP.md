@@ -48,6 +48,7 @@ phone/desktop app. It does the SWD talking; the module is never modified.
 - [x] **Select sound** (focus, `FUN_08011980`) + **switch playback** (engine event 3) — `mg_load.py --sound N [--play]`, hardware-tested 2026-10-11.
 - [x] Map **Scene A / Scene B raw arrays** — sound struct +0x48.. (A), +0x264 (B); `tools/mg_param.py` (2026-10-11).
 - [x] **Patch write-back** — plain RAM write to the stored scene value; engine follows, no halt (2026-10-11). Knobs JUMP on touch (no pickup). Persisted by setting the project-changed flag (state+0x11) → module autosaves; survives power-cycle ✅.
+- [x] **Mod matrix** (RAND/X/Y/Z → params, per scene) — read + write via `mg_param.py --mod` (2026-10-11).
 - [ ] Nice-to-haves: trigger record, save/load project, read slot→file assignments (Sound structs @ base+0x58c, 0x9f0 stride).
 - [ ] Real **unit conversions**: RATE→Hz, SIZE→ms/s, PITCH→semitones, TONE→%, SHAPE→name.
 
