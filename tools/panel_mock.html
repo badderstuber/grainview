@@ -2,14 +2,13 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>Screen Module — 8 HP panel, to scale</title>
+<title>GRAINVIEW — 8 HP panel, to scale</title>
 <style>
   body{background:#14171a;color:#c9d2d8;font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;
        margin:0;padding:26px}
   h1{font-size:17px;margin:0 0 4px}
   .sub{color:#7d8893;font-size:13px;margin-bottom:20px}
   .wrap{display:flex;gap:40px;align-items:flex-start;flex-wrap:wrap}
-  canvas{background:transparent}
   .legend{max-width:300px}
   .legend h2{font-size:14px;margin:0 0 8px}
   .legend li{margin:4px 0;color:#9aa6ad;font-size:13px}
@@ -18,162 +17,147 @@
 </head>
 <body>
   <h1>"GRAINVIEW" — companion screen module (8 HP · 3U), to scale</h1>
-  <div class="sub">128×128 greyscale OLED + push-encoder + 4 buttons. Connects to the Multigrain's
-     JTRACE via a 4-wire ribbon (on the back). Working title — rename freely.</div>
+  <div class="sub">128×128 greyscale OLED · push-encoder · 6 buttons · A/B scene LEDs.
+     4-wire SWD ribbon to the Multigrain JTRACE on the back. Working title.</div>
   <div class="wrap">
     <canvas id="panel"></canvas>
     <div class="legend">
       <h2>Layout</h2>
       <ul>
-        <li><span class="k">OLED 128×128</span> — 2.67 cm square, top third. Waveform + params + browser.</li>
-        <li><span class="k">Encoder (push)</span> — scroll lists / change value; push = select.</li>
-        <li><span class="k">BACK</span> — up a level / exit.</li>
-        <li><span class="k">LOAD</span> — load selected WAV into the current slot.</li>
-        <li><span class="k">A / B</span> — toggle Scene A / B view.</li>
-        <li><span class="k">FUNC</span> — shift for secondary actions.</li>
-        <li><span class="k">LED</span> — link/activity (green = mirroring).</li>
+        <li><span class="k">OLED 128×128</span> — top, 2.67 cm square.</li>
+        <li><span class="k">Encoder (push)</span> — page views; navigate; push to select.</li>
+        <li><span class="k">BACK</span> — up a level.</li>
+        <li><span class="k">VIEW</span> — cycle WAVE·PARM·MOD·SET.</li>
+        <li><span class="k">FILE</span> — SD load / save.</li>
+        <li><span class="k">SOUND ‹ ›</span> — change sound 1–8.</li>
+        <li><span class="k">A/B</span> — toggle scene; the <span class="k">A/B LEDs</span>
+            beside it show which is live (A green · B red).</li>
       </ul>
       <h2>Physical</h2>
       <ul>
         <li>Width: <span class="k">8 HP = 4.03 cm</span></li>
         <li>Height: <span class="k">3U = 12.85 cm</span></li>
-        <li>Power: rack bus (+12 V → 3.3 V); VTREF sensed from Multigrain.</li>
-        <li>No front jacks — link ribbon + power on the back.</li>
+        <li>Power: rack bus (+12 V → 3.3 V); VTREF sensed.</li>
+        <li>No front jacks — ribbon + power on the back.</li>
       </ul>
     </div>
   </div>
 
 <script>
-const S = 6;                 // px per mm
-const HP = 5.08, W_mm = 8*HP, H_mm = 128.5;   // 8HP x 3U
-const M = 54;                // margin for annotations
-const PW = W_mm*S, PH = H_mm*S;
+const S=6, HP=5.08, W_mm=8*HP, H_mm=128.5, M=54, PW=W_mm*S, PH=H_mm*S;
 
-// ---------- OLED content (reused from screen_mock) ----------
-function makeWave(n){const a=new Array(n);for(let i=0;i<n;i++){const t=i/n;
-  const env=Math.pow(Math.sin(Math.PI*t),0.6);const body=0.55+0.45*Math.sin(2*Math.PI*7*t+1.3);
-  const det=0.5+0.5*Math.sin(2*Math.PI*43*t);const burst=(t>0.33&&t<0.42)?1:0;
-  a[i]=Math.min(1,env*(0.75*body+0.25*det)+burst*0.4*env);}return a;}
-function owave(ctx,x,y,w,h,s,e,sc){const n=w,wav=makeWave(n),mid=y+h/2;
-  for(let i=0;i<n;i++){const amp=wav[i]*(h/2-1);const inw=(i/n)>=s&&(i/n)<=e;
-    ctx.fillStyle=inw?'rgb(150,150,150)':'rgb(70,70,70)';ctx.fillRect(x+i,mid-amp,1,amp*2);
-    ctx.fillStyle=inw?'rgb(255,255,255)':'rgb(150,150,150)';ctx.fillRect(x+i,mid-amp,1,1);ctx.fillRect(x+i,mid+amp-1,1,1);}
-  ctx.fillStyle='#fff';ctx.fillRect(x+Math.round(s*w),y,1,h);ctx.fillRect(x+Math.round(e*w),y,1,h);
-  const px=x+Math.round(sc*w);for(let yy=y;yy<y+h;yy+=2)ctx.fillRect(px,yy,1,1);}
-function otext(ctx,s,x,y,px,b,bold){ctx.fillStyle='rgb('+b+','+b+','+b+')';
-  ctx.font=(bold?'bold ':'')+px+'px ui-monospace,Menlo,monospace';ctx.textBaseline='top';ctx.fillText(s,x,y);}
-function ocell(ctx,x,y,w,h,l,v,sel){if(sel){ctx.fillStyle='rgb(230,230,230)';ctx.fillRect(x,y,w,h);}
-  otext(ctx,l,x+3,y+2,7,sel?30:120,false);otext(ctx,v,x+3,y+h-11,10,sel?20:255,true);}
-function obox(ctx,x,y,w,h){ctx.fillStyle='rgb(60,60,60)';ctx.fillRect(x,y,w,1);ctx.fillRect(x,y+h-1,w,1);ctx.fillRect(x,y,1,h);ctx.fillRect(x+w-1,y,1,h);}
-function drawOLED(ctx){
-  otext(ctx,'SOUND 1',3,2,11,255,true);otext(ctx,'vox.wav',128-8*6,5,8,150,false);
-  ctx.fillStyle='rgb(60,60,60)';ctx.fillRect(0,16,128,1);
-  owave(ctx,3,20,122,48,0.18,0.72,0.46);
-  const L=[['START','0.18'],['WRAP','0.72'],['SCAN','+.04'],['SIZE','240ms'],['PITCH','+7'],['RATE','12.4']];
-  const cw=42,ch=22;for(let i=0;i<6;i++){const cx=1+(i%3)*cw,cy=74+Math.floor(i/3)*ch;ocell(ctx,cx,cy,cw-1,ch-1,L[i][0],L[i][1],i===4);}
-  otext(ctx,'MORPH',3,120,7,120,false);obox(ctx,44,120,80,7);ctx.fillStyle='rgb(220,220,220)';ctx.fillRect(45,121,Math.round(80*0.62),5);
+// ---------- OLED content ----------
+function makeWave(n,seed){const a=new Array(n),f1=5+seed*1.7,f2=37+seed*3;
+  for(let i=0;i<n;i++){const t=i/n,env=Math.pow(Math.sin(Math.PI*t),0.6),
+    body=0.55+0.45*Math.sin(2*Math.PI*f1*t+seed),det=0.5+0.5*Math.sin(2*Math.PI*f2*t),
+    burst=(t>0.33&&t<0.42)?1:0;a[i]=Math.min(1,env*(0.75*body+0.25*det)+burst*0.4*env);}return a;}
+function ow(c,x,y,w,h,s,e,sc){const n=w,wav=makeWave(n,3),mid=y+h/2;
+  for(let i=0;i<n;i++){const amp=wav[i]*(h/2-1),win=(i/n)>=s&&(i/n)<=e;
+    c.fillStyle=win?'rgb(150,150,150)':'rgb(70,70,70)';c.fillRect(x+i,mid-amp,1,amp*2);
+    c.fillStyle=win?'rgb(255,255,255)':'rgb(150,150,150)';c.fillRect(x+i,mid-amp,1,1);c.fillRect(x+i,mid+amp-1,1,1);}
+  c.fillStyle='#fff';c.fillRect(x+Math.round(s*w),y,1,h);c.fillRect(x+Math.round(e*w),y,1,h);
+  const px=x+Math.round(sc*w);for(let yy=y;yy<y+h;yy+=2)c.fillRect(px,yy,1,1);}
+function ot(c,s,x,y,px,b,bold){c.fillStyle='rgb('+b+','+b+','+b+')';
+  c.font=(bold?'bold ':'')+px+'px ui-monospace,Menlo,monospace';c.textBaseline='top';c.fillText(s,x,y);}
+function ob(c,x,y,w,h){c.fillStyle='rgb(60,60,60)';c.fillRect(x,y,w,1);c.fillRect(x,y+h-1,w,1);c.fillRect(x,y,1,h);c.fillRect(x+w-1,y,1,h);}
+function oc(c,x,y,w,h,l,v,sel){if(sel){c.fillStyle='rgb(230,230,230)';c.fillRect(x,y,w,h);}
+  ot(c,l,x+3,y+2,7,sel?30:120,false);ot(c,v,x+3,y+h-11,10,sel?20:255,true);}
+function drawOLED(c){
+  // tab strip (WAVE active) + context
+  const TAB=['WAVE','PARM','MOD','SET'];for(let i=0;i<4;i++){const x=i*32,cur=i===0;
+    if(cur){c.fillStyle='rgb(230,230,230)';c.fillRect(x,0,32,11);}ot(c,TAB[i],x+5,2,8,cur?20:120,true);}
+  c.fillStyle='rgb(60,60,60)';c.fillRect(0,11,128,1);
+  ot(c,'S1',2,13,9,255,true);ot(c,'vox.wav',22,14,8,200,false);
+  c.fillStyle='rgb(230,230,230)';c.fillRect(116,13,11,10);ot(c,'A',119,14,8,20,true);
+  ow(c,3,30,122,46,0.18,0.72,0.46);
+  ot(c,'MORPH',3,86,7,120,false);ob(c,44,86,80,8);c.fillStyle='rgb(220,220,220)';c.fillRect(45,87,Math.round(80*0.62),6);
+  ot(c,'START .18',3,100,8,170,false);ot(c,'WRAP .72',66,100,8,170,false);
+  ot(c,'SCAN +.04',3,112,8,170,false);ot(c,'SIZE 240ms',66,112,8,170,false);
 }
-// render OLED to an offscreen, quantized to 16 greys, at given pixel size
 function oledCanvas(sizePx){
   const N=128,off=document.createElement('canvas');off.width=N;off.height=N;
   const o=off.getContext('2d');o.fillStyle='#000';o.fillRect(0,0,N,N);drawOLED(o);
   const im=o.getImageData(0,0,N,N),d=im.data;
-  for(let i=0;i<d.length;i+=4){let lum=0.299*d[i]+0.587*d[i+1]+0.114*d[i+2];
-    let q=Math.round(lum/255*15)/15*255;d[i]=Math.round(q*0.92);d[i+1]=Math.round(q*0.98);d[i+2]=q;}
+  for(let i=0;i<d.length;i+=4){let l=0.299*d[i]+0.587*d[i+1]+0.114*d[i+2];
+    let q=Math.round(l/255*15)/15*255;d[i]=Math.round(q*0.92);d[i+1]=Math.round(q*0.98);d[i+2]=q;}
   o.putImageData(im,0,0);
   const out=document.createElement('canvas');out.width=sizePx;out.height=sizePx;
-  const c=out.getContext('2d');c.imageSmoothingEnabled=false;c.drawImage(off,0,0,sizePx,sizePx);return out;
-}
+  const cc=out.getContext('2d');cc.imageSmoothingEnabled=false;cc.drawImage(off,0,0,sizePx,sizePx);return out;}
 
 // ---------- panel ----------
-const cv=document.getElementById('panel');
-cv.width=PW+M*2; cv.height=PH+M*2;
+const cv=document.getElementById('panel');cv.width=PW+M*2;cv.height=PH+M*2;
 const g=cv.getContext('2d');
-function mm(v){return v*S;}
-const ox=M, oy=M;                 // panel origin
-function px(xmm){return ox+mm(xmm);}
-function py(ymm){return oy+mm(ymm);}
+const ox=M,oy=M;
+function mm(v){return v*S;}function px(x){return ox+mm(x);}function py(y){return oy+mm(y);}
 
-// panel body
-g.fillStyle='#17191c';
-roundRect(g,ox,oy,PW,PH,6);g.fill();
-g.strokeStyle='#2c3338';g.lineWidth=2;roundRect(g,ox,oy,PW,PH,6);g.stroke();
-
-// mounting slots (M3 ovals) near corners
+// body + rails
+g.fillStyle='#17191c';roundRect(ox,oy,PW,PH,6);g.fill();
+g.strokeStyle='#2c3338';g.lineWidth=2;roundRect(ox,oy,PW,PH,6);g.stroke();
 g.fillStyle='#0c0d0f';g.strokeStyle='#3a4248';g.lineWidth=1;
-for(const yy of [4.5, H_mm-4.5]) for(const xx of [5, W_mm-5]){
-  oval(g,px(xx),py(yy),5,3);g.fill();g.stroke();
-}
+for(const yy of [4.5,H_mm-4.5])for(const xx of [5,W_mm-5]){ellipse(px(xx),py(yy),5,3);g.fill();g.stroke();}
 
 // title
-g.fillStyle='#e8edf0';g.textAlign='center';
-g.font='bold '+ (3.4*S) +'px ui-monospace,Menlo,monospace';
-g.fillText('GRAINVIEW', px(W_mm/2), py(9.5));
+g.fillStyle='#e8edf0';g.textAlign='center';g.font='bold '+(3.2*S)+'px ui-monospace,Menlo,monospace';
+g.fillText('GRAINVIEW',px(W_mm/2),py(9));
 
-// screen (centred), 26.7mm square, top area
-const scr=26.7, sx=(W_mm-scr)/2, sy=12.5;
-// bezel
-g.fillStyle='#000';roundRect(g,px(sx)-4,py(sy)-4,mm(scr)+8,mm(scr)+8,4);g.fill();
-g.strokeStyle='#333';g.lineWidth=1;roundRect(g,px(sx)-4,py(sy)-4,mm(scr)+8,mm(scr)+8,4);g.stroke();
-g.drawImage(oledCanvas(Math.round(mm(scr))), px(sx), py(sy));
+// screen
+const scr=26.7,sx=(W_mm-scr)/2,sy=12.5;
+g.fillStyle='#000';roundRect(px(sx)-4,py(sy)-4,mm(scr)+8,mm(scr)+8,4);g.fill();
+g.strokeStyle='#333';g.lineWidth=1;roundRect(px(sx)-4,py(sy)-4,mm(scr)+8,mm(scr)+8,4);g.stroke();
+g.drawImage(oledCanvas(Math.round(mm(scr))),px(sx),py(sy));
 
-// link LED (top-right of screen)
-led(px(W_mm-5), py(11), '#39d98a');
+// --- controls (per sketch) ---
+const colL=12, colR=28;
+// row 1: BACK (left) + encoder (right)
+knob(px(colR),py(54),mm(6.4));
+button(px(colL),py(55),mm(3.2),'BACK');
+// row 2: VIEW / FILE
+button(px(colL),py(73),mm(3.2),'VIEW');
+button(px(colR),py(73),mm(3.2),'FILE');
+// row 3: SOUND < >
+button(px(colL),py(90),mm(3.2),'‹');
+button(px(colR),py(90),mm(3.2),'›');
+g.fillStyle='#8a949c';g.textAlign='center';g.font=(2.3*S)+'px ui-monospace,Menlo,monospace';
+g.fillText('SOUND',px(W_mm/2),py(89));
+// row 4: A/B button + A/B scene LEDs
+button(px(colL),py(108),mm(3.2),'A/B');
+sceneLED(px(24),py(104.5),'#39d98a',true ,'A');   // A live (lit)
+sceneLED(px(24),py(111.5),'#39d98a',false,'B');   // B off (same colour, unlit)
 
-// encoder (push) — centre, below screen
-const encY=58, encR=7;
-knob(px(W_mm/2), py(encY), mm(encR));
-label('PUSH = SELECT', W_mm/2, encY+10.5, 2.2, '#8a949c');
+// footer
+g.fillStyle='#6b767d';g.textAlign='center';g.font=(2.2*S)+'px ui-monospace,Menlo,monospace';
+g.fillText('for MULTIGRAIN',px(W_mm/2),py(120));
 
-// 4 buttons: 2x2 grid below encoder
-const bY0=78, bdx=11, bdy=14, br=3.4;
-const btns=[['BACK',-1,0],['LOAD',1,0],['A / B',-1,1],['FUNC',1,1]];
-for(const [lab,cx,cy] of btns){
-  const bx=W_mm/2 + cx*bdx, by=bY0 + cy*bdy;
-  button(px(bx),py(by),mm(br),lab);
-}
-
-// footer note
-g.fillStyle='#6b767d';g.textAlign='center';
-g.font=(2.3*S)+'px ui-monospace,Menlo,monospace';
-g.fillText('for MULTIGRAIN', px(W_mm/2), py(118));
-
-// ---------- dimension annotations ----------
-g.strokeStyle='#5b666d';g.fillStyle='#8a949c';
-g.lineWidth=1;g.textAlign='center';g.font='12px -apple-system,sans-serif';
-// width (top)
-dimH(ox, ox+PW, oy-16, '8 HP · 4.03 cm');
-// height (left)
-dimV(oy, oy+PH, ox-18, '3U · 12.85 cm');
+// dimensions
+g.strokeStyle='#5b666d';g.fillStyle='#8a949c';g.lineWidth=1;g.textAlign='center';g.font='12px -apple-system,sans-serif';
+dimH(ox,ox+PW,oy-16,'8 HP · 4.03 cm');
+dimV(oy,oy+PH,ox-18,'3U · 12.85 cm');
 
 // ---------- helpers ----------
-function roundRect(c,x,y,w,h,r){c.beginPath();c.moveTo(x+r,y);c.arcTo(x+w,y,x+w,y+h,r);
-  c.arcTo(x+w,y+h,x,y+h,r);c.arcTo(x,y+h,x,y,r);c.arcTo(x,y,x+w,y,r);c.closePath();}
-function oval(c,cx,cy,rx,ry){c.beginPath();c.ellipse(cx,cy,rx,ry,0,0,7);c.closePath();}
-function knob(cx,cy,r){
-  const grd=g.createRadialGradient(cx-r*0.3,cy-r*0.3,r*0.2,cx,cy,r);
-  grd.addColorStop(0,'#3a4046');grd.addColorStop(1,'#15181b');
-  g.fillStyle=grd;g.beginPath();g.arc(cx,cy,r,0,7);g.fill();
+function roundRect(x,y,w,h,r){g.beginPath();g.moveTo(x+r,y);g.arcTo(x+w,y,x+w,y+h,r);
+  g.arcTo(x+w,y+h,x,y+h,r);g.arcTo(x,y+h,x,y,r);g.arcTo(x,y,x+w,y,r);g.closePath();}
+function ellipse(cx,cy,rx,ry){g.beginPath();g.ellipse(cx,cy,rx,ry,0,0,7);g.closePath();}
+function knob(cx,cy,r){const gr=g.createRadialGradient(cx-r*0.3,cy-r*0.3,r*0.2,cx,cy,r);
+  gr.addColorStop(0,'#3a4046');gr.addColorStop(1,'#15181b');
+  g.fillStyle=gr;g.beginPath();g.arc(cx,cy,r,0,7);g.fill();
   g.strokeStyle='#4a5258';g.lineWidth=2;g.beginPath();g.arc(cx,cy,r,0,7);g.stroke();
-  g.strokeStyle='#e8edf0';g.lineWidth=2;g.beginPath();g.moveTo(cx,cy);g.lineTo(cx,cy-r+2);g.stroke();
-}
-function button(cx,cy,r,lab){
-  g.fillStyle='#22282c';g.strokeStyle='#454e54';g.lineWidth=1.5;
-  roundRect(g,cx-r,cy-r,r*2,r*2,3);g.fill();roundRect(g,cx-r,cy-r,r*2,r*2,3);g.stroke();
+  g.strokeStyle='#e8edf0';g.lineWidth=2;g.beginPath();g.moveTo(cx,cy);g.lineTo(cx,cy-r+2);g.stroke();}
+function button(cx,cy,r,lab){g.fillStyle='#22282c';g.strokeStyle='#454e54';g.lineWidth=1.5;
+  roundRect(cx-r,cy-r,r*2,r*2,3);g.fill();roundRect(cx-r,cy-r,r*2,r*2,3);g.stroke();
   g.fillStyle='#aeb8bf';g.textAlign='center';g.font='bold '+(2.0*S)+'px ui-monospace,Menlo,monospace';
-  g.fillText(lab,cx,cy+r+3.5*S*0.0+ r*0.0 + (2.0*S));
-}
-function led(cx,cy,col){g.fillStyle=col;g.beginPath();g.arc(cx,cy,2.2*S,0,7);g.fill();
-  g.fillStyle='rgba(57,217,138,.25)';g.beginPath();g.arc(cx,cy,3.6*S,0,7);g.fill();}
-function label(t,xmm,ymm,sz,col){g.fillStyle=col;g.textAlign='center';
-  g.font=(sz*S)+'px ui-monospace,Menlo,monospace';g.fillText(t,px(xmm),py(ymm));}
-function dimH(x0,x1,y,txt){g.beginPath();g.moveTo(x0,y);g.lineTo(x1,y);g.stroke();
+  g.fillText(lab,cx,cy+r+6);}
+function sceneLED(cx,cy,col,on,letter){
+  if(on){g.fillStyle=col+'44';g.beginPath();g.arc(cx,cy,3.2*S,0,7);g.fill();}
+  g.fillStyle=on?col:'#2a2f33';g.beginPath();g.arc(cx,cy,1.8*S,0,7);g.fill();
+  g.fillStyle=on?'#e8edf0':'#6b767d';g.textAlign='left';g.font='bold '+(2.4*S)+'px ui-monospace,Menlo,monospace';
+  g.fillText(letter,cx+3.2*S,cy-1.4*S);}
+function dimH(x0,x1,y,t){g.beginPath();g.moveTo(x0,y);g.lineTo(x1,y);g.stroke();
   for(const x of [x0,x1]){g.beginPath();g.moveTo(x,y-4);g.lineTo(x,y+4);g.stroke();}
-  g.fillStyle='#14171a';g.fillRect((x0+x1)/2-58,y-9,116,16);g.fillStyle='#9aa6ad';g.fillText(txt,(x0+x1)/2,y+4);}
-function dimV(y0,y1,x,txt){g.beginPath();g.moveTo(x,y0);g.lineTo(x,y1);g.stroke();
+  g.fillStyle='#14171a';g.fillRect((x0+x1)/2-58,y-9,116,16);g.fillStyle='#9aa6ad';g.fillText(t,(x0+x1)/2,y+4);}
+function dimV(y0,y1,x,t){g.beginPath();g.moveTo(x,y0);g.lineTo(x,y1);g.stroke();
   for(const y of [y0,y1]){g.beginPath();g.moveTo(x-4,y);g.lineTo(x+4,y);g.stroke();}
   g.save();g.translate(x-6,(y0+y1)/2);g.rotate(-Math.PI/2);
-  g.fillStyle='#14171a';g.fillRect(-60,-9,120,16);g.fillStyle='#9aa6ad';g.fillText(txt,0,4);g.restore();}
+  g.fillStyle='#14171a';g.fillRect(-60,-9,120,16);g.fillStyle='#9aa6ad';g.fillText(t,0,4);g.restore();}
 </script>
 </body>
 </html>

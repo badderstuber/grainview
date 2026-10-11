@@ -76,9 +76,26 @@ web app over WiFi as an optional big-screen view.)
       VTREF sense only (no back-power), SWD header to ribbon.
 - [ ] Optional Pico W: serve the Phase-2 web app/API over WiFi too.
 
-Components (draft): RP2040 (Pico/Pico W) · ST7789 240x320 IPS SPI TFT · 1 push
-rotary encoder + 2-4 buttons · eurorack power (+12V->3V3 buck/LDO) · 2x5 1.27mm
-or 4-pin header + ribbon to Multigrain JTRACE.
+### GRAINVIEW spec — LOCKED 2026-10-11
+- **Display:** 128×128 **greyscale** OLED (SSD1327, 1.5"). Elektron-style mono look.
+- **Size:** 8 HP × 3U (4.03 cm × 12.85 cm).
+- **Brain:** RP2040 (Pico / Pico W), SWD master via PIO; LVGL UI.
+- **Controls:** push-encoder + **6 buttons** — BACK, VIEW, FILE, SOUND‹, SOUND›,
+  A/B — plus **2 A/B scene LEDs** (same colour; lit=active scene) beside the A/B btn.
+- **Panel layout** (top→bottom): screen · [BACK | encoder] · [VIEW | FILE] ·
+  [SOUND‹ | SOUND›] · [A/B btn | A/B LEDs].
+- **4 views** (VIEW button cycles + encoder pages, tab strip top): WAVE · PARM · MOD · SET.
+- **Interaction model:** encoder turn = page views / navigate; push = dive-in /
+  select; BACK = up a level; SOUND‹› & SCENE A/B are global (apply across views);
+  FILE opens the SD browser overlay. No long-press / chords (keep it obvious).
+- **Power:** rack bus +12 V → 3.3 V; VTREF sensed from Multigrain; shared GND.
+- **Link:** 4-wire SWD ribbon (SWDIO/SWCLK/GND/VTREF) to Multigrain JTRACE, on the back.
+- **Mockups / spec:** `tools/grainview_emulator.html` (interactive UX = firmware
+  spec), `tools/panel_mock.html` (panel to scale), `tools/screen_mock.html` (OLED compare).
+
+Components to buy (when app works, Phase 3): RP2040 Pico W · SSD1327 128×128 OLED ·
+push rotary encoder · 6 tactile buttons · 2 LEDs · eurorack power (+12V→3V3) ·
+1.27mm header + ribbon to JTRACE.
 
 ### Phase 4 — OPTIONAL stretch: module firmware mod
 - [ ] Only if ever wanting zero extra hardware. Use `FIRMWARE_MOD_PLAN.md`.

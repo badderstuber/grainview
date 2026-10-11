@@ -32,7 +32,14 @@ _Last updated: 2026-10-11._
   breadboard Pico first, then KiCad PCB. Pico W can also serve the web app over
   WiFi as an optional big-screen view. See ROADMAP.md Phase 3.
 - **Mockups built (no hardware):** `tools/screen_mock.html` (OLED options
-  compared), `tools/panel_mock.html` (8 HP panel to scale with live screen).
+  compared), `tools/panel_mock.html` (8 HP panel to scale with live screen),
+  `tools/grainview_emulator.html` (interactive module emulator = firmware spec).
+- **GRAINVIEW spec LOCKED (2026-10-11):** 128×128 greyscale OLED (SSD1327), 8 HP×3U;
+  push-encoder + 6 buttons (BACK, VIEW, FILE, SOUND‹, SOUND›, A/B) + 2 same-colour
+  A/B scene LEDs; 4 views WAVE·PARM·MOD·SET (VIEW btn + encoder cycle); turn=page/
+  navigate, push=dive/select, BACK=up, SOUND/SCENE global, FILE=overlay, no chords.
+  Full spec in ROADMAP.md Phase 3. Web app = faithful emulator of this module (one
+  UX, later ported to LVGL).
 - **Day-job framework (`.claude/`):** bootstrap **deferred** — it's TDD/web-shaped
   and this phase is exploratory RE/hardware. Revisit when building the firmware/web
   app. Context clear/restore handled by memory + this file + `/clear` (no framework
