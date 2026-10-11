@@ -42,8 +42,9 @@ phone/desktop app. It does the SWD talking; the module is never modified.
 - [x] Ghidra RE: located load-WAV / dir-scan / sound functions + args.
 
 ### Phase 1 — Complete the SWD feature set (ST-Link + Mac, dev)
-- [ ] **Read SD file list** through the module (`mg_sd.py`) — names + indices. *(built, needs hardware test)*
-- [ ] **Load a WAV into a slot** via `FUN_08012b24(index)` — test safely on a scratch sound; confirm which slot it targets + how to choose the slot.
+- [x] **Read SD file list** through the module (`mg_sd.py`) — names + indices. *(hardware-tested 2026-10-11: 11 files, indices 0–10)*
+- [x] **Load a WAV into the selected sound** — `tools/mg_load.py` via front-panel routine `FUN_0803e710` (hardware-tested 2026-10-11). (`FUN_08012b24` = *load Preset(n+1).mgp*.)
+- [ ] **Load preset N** via `FUN_08012b24(N-1)` — verify on a scratch project with an existing preset.
 - [ ] Find **"select active sound"** function/state so loads can target a chosen slot.
 - [ ] Map **Scene A / Scene B raw arrays** (we currently read the morphed "current" values) for per-scene display/edit.
 - [ ] Figure out **patch write-back** (write inactive scene, or call setter fns) — the clean way to send values without fighting the knobs.
@@ -104,11 +105,12 @@ push rotary encoder · 6 tactile buttons · 2 LEDs · eurorack power (+12V→3V3
 ---
 
 ## Immediate next tasks (resume when power supply is back)
-1. `mg_sd.py` → confirm real WAV list reads out.
-2. Test `FUN_08012b24(index)` load into a scratch sound (with go-ahead).
-3. Find "select active sound" so we can target a specific slot.
+1. ~~`mg_sd.py` → confirm real WAV list reads out.~~ ✅
+2. ~~Restore the project blanked by the bad preset-load test.~~ ✅ (reloaded its preset)
+3. ~~Find the real WAV-into-sound loader.~~ ✅ `mg_load.py`
+4. Find "select active sound" so we can target a specific slot.
 
 ## Open questions
 - Phone app: responsive **web app served by the bridge** (recommended) vs native?
-- Which slot does `FUN_08012b24` load into, and how is the active sound chosen?
+- Where is the WAV→sound load, and how is the active sound chosen?
 - Write-back strategy: inactive-scene write vs setter-function calls.

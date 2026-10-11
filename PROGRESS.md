@@ -17,14 +17,55 @@ _Last updated: 2026-10-11._
   unlocks *driving* the module with its own code — no firmware mod.
 - **Ghidra located the file/sound functions** (overnight job → `GHIDRA_FINDINGS.md`,
   callers → `GHIDRA_CALLERS.md`):
-  - WAV loader entry: **`FUN_08012b24(wav_index)`** (calls `FUN_08026754(index,
-    target)`; target buffer = `0x24020b84`).
+  - ~~WAV loader~~ **CORRECTED 2026-10-11: PRESET loader.** `FUN_08012b24(n)` →
+    `FUN_08026754(n, target)` opens **`Preset%02d.mgp` with n+1** in the current
+    project (format string @`0x0805c7d8`), reads 4-byte checksum + ≤0x8000 body
+    (matches .mgp sizes 16388/32772), deserializes via `FUN_08023aec`.
+    "SD: Loading %s" is the PRESET log, not WAV. Real WAV loader still unknown.
   - Dir scan: `FUN_0801f0d4()`. File list in RAM: names at **`0x30008800`**
     (0x100 each), count at **`0x240272d8`** → `tools/mg_sd.py` reads it.
   - Sounds array at struct base `+0x58c`, `0x9f0` stride.
-- **NOT yet done (needs hardware; Leo's power supply was missing):** run
-  `mg_sd.py`, test `FUN_08012b24` load into a scratch slot, find "select active
-  sound", map Scene A/B raw arrays, write-back strategy.
+- **`mg_sd.py` WORKS on hardware (2026-10-11):** read 11 filenames from
+  `/Multigrain/Wavs` (index 0–10, last = `leo-bangla-stabs.wav`) — list order
+  is alphabetical, index = position.
+- **First load test (2026-10-11): `mg_call.py 0x08012b24 10`** → returned in
+  0.02 s (r0=0x20008c5c), then module went dark: all LEDs off except **Sound 1
+  blinking green**, SD LED on, no audio. CPU still alive: PC sampled (DWT_PCSR
+  `0xE000101C`) = `0x0800ba9e` = **main idle loop** in `FUN_0800ba80`:
+  `while(!*(u32*)0x24020b30); FUN_08012fb4(); *0x24020b30=0;` — i.e. main waits
+  on a tick flag then runs the UI/control task. Our call was injected at that
+  idle point (clean spot). **Cause:** arg 10 = load `Preset11.mgp`, which
+  doesn't exist → project state cleared to empty, then autosaved → that
+  project's `Autosave.mgp` now blank (all sound buttons grey, selected one
+  blinking green). Power-cycle doesn't fix (it's on the card); module boots fine
+  without the card / in other projects. `tools/mg_pcsample.py` (new: DWT_PCSR
+  histogram, no halt) confirmed CPU healthy (~81% main idle loop). **Fixed** by
+  reloading one of that project's saved presets from the front panel (confirmed). SD backup on Leo's
+  Desktop was taken AFTER the incident (contains blank autosave).
+  Lessons: switch to a throwaway project before load experiments; verify a
+  function's format strings/args in the .bin before calling it.
+- **Upside:** we now have a working-ish **"load preset N" call** — call
+  `FUN_08012b24(n)` with n = existing preset number − 1 (test on a scratch project).
+- **Real WAV loader found (offline, 2026-10-11)** with new `tools/mg_xref.py`
+  (BL/literal xrefs straight from the .bin):
+  - `FUN_0801fb94(folder, name, buf, max, *n)` = raw WAV read (folder 0=project,
+    1=/Wavs, 2=/Recs). `FUN_080129b0(folder, name, sound)` = load into sound N.
+    `FUN_08012a3c(N)` = reload sound N from its struct. `FUN_08012edc(a,b)` = copy sound.
+  - **`FUN_0803e710(ui, delta)` = front-panel browse+load** into the *current*
+    sound: cursor += delta (clamped), load, set filename param via setter on
+    success. UI calls it with ui=`0x240452c8` after checking SD ready.
+  - Current sound u8 `0x24025b30`; sound struct `0x24020b84 + N*0x9f0`
+    (source u8 +0x59c, /Wavs filename +0x6c8, "missing" flag +0x4f4);
+    browse cursor i32 `0x24033344 + (folder*8+sound)*4`; counts
+    `0x240272d4 + folder*4`; lists 0x30000800 / 0x30008800 / Rec ints 0x30010800;
+    SD state `0x20008ccc` (1 busy, 3 error).
+  - **`tools/mg_load.py`** wraps it: status (read-only) / `INDEX --dry-run` /
+    `INDEX`; only injects while CPU is in main idle loop (thread mode).
+    **HARDWARE-TESTED 2026-10-11 ✅:** Sound 4 <- [10] leo-bangla-stabs.wav,
+    r0=1 in 0.08 s, sound plays it, cursor 10, module fine. Current-sound byte
+    confirmed against front panel.
+- **NOT yet done:** *set* active sound (load into any sound, not just selected), map Scene
+  A/B raw arrays, write-back strategy.
 - **Endgame direction chosen (Leo's idea):** a dedicated **"GRAINVIEW" screen
   eurorack module** — RP2040 + **128×128 greyscale OLED (SSD1327)** + push-encoder
   + 4 buttons, **8 HP**, bus-powered, 4-wire SWD ribbon to JTRACE. The Pico is the
@@ -180,7 +221,7 @@ address with 1 when calling):
 | Function | Role | Args (from decompile) |
 |---|---|---|
 | **FUN_0801f0d4** | **Directory scan of /Multigrain/Wavs -> builds file list** | none (uses globals). `f_opendir` via FUN_080522b8. |
-| **FUN_08026754** | **Load WAV by index into a sound** (best "load into slot" candidate) | `(uint index, int target)` — builds filename from index+1, logs "Loading %s". |
+| **FUN_08026754** | ~~Load WAV~~ **Load preset `Preset%02d.mgp` (index+1)** — corrected 2026-10-11 | `(uint index, int target)` — builds filename from index+1, logs "Loading %s". |
 | FUN_08024414 | Load serialized state/preset into target | `(char* filename, void* target)` — f_open + reader FUN_08023aec. |
 | FUN_080277ac | Load project/preset | `(void* target)` — different log fmt. |
 | FUN_0801e104 | "Collect Sound" = project-SAVE gather (copies sound WAVs) | `(int struct_base, char* outbuf)`. Confirms **sounds array at base+0x58c**. |
