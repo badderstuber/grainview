@@ -44,7 +44,11 @@ _Last updated: 2026-10-11._
   Desktop was taken AFTER the incident (contains blank autosave).
   Lessons: switch to a throwaway project before load experiments; verify a
   function's format strings/args in the .bin before calling it.
-- **Upside:** we now have a working-ish **"load preset N" call** — call
+- **Preset load WORKS (2026-10-11):** new `tools/mg_preset.py N` (one-halt,
+  return-to-idle call of `FUN_08012b24(N-1)`). Project01 Preset02 then Preset01:
+  ~13 ms halt, SD done in ~1.1-1.4 s, all 16 scene rows changed; Preset01
+  matched the session's first scene dump exactly. File must exist!
+- (old note) we now have a working-ish **"load preset N" call** — call
   `FUN_08012b24(n)` with n = existing preset number − 1 (test on a scratch project).
 - **Real WAV loader found (offline, 2026-10-11)** with new `tools/mg_xref.py`
   (BL/literal xrefs straight from the .bin):
@@ -111,7 +115,18 @@ _Last updated: 2026-10-11._
   knob moves; no halt, no glitch** — Leo heard SIZE 0↔0.5 toggling.
   New **`tools/mg_param.py`** (table / one sound / set / `--wiggle` A-B test).
   **Knob takeover = JUMP** (touching a knob snaps the param to the knob's
-  position; app values last until a knob moves). Open: does autosave persist writes,
+  position; app values last until a knob moves).
+  **Autosave:** project switch saves the outgoing project (our writes survive),
+  but the background autosave only runs when the **project-changed flag**
+  `0x20008c6d` (state+0x11) is set — plain writes don't set it (power-cycle
+  lost them). UI task (`FUN_08012fb4`, r4=state) checks every ~10 s (state+0x0c
+  ≈1 kHz tick counter, threshold ~10000): settings flag +0x10 → Settings.mgs,
+  else +0x11 → Autosave.mgp (`FUN_08021bf8`), clear on success. **Fix: after a
+  write set +0x11 = +0x08 (autosave-enabled)** → module saved within 4 s,
+  value survived power-cycle ✅. `mg_param.py` does this by default (`--no-save`).
+  Current project index u32 `0x20008cc4` (Project%02d = n+1), path `0x240332fc`.
+  Boot quirk: physical knob positions get applied to the edited scene at boot.
+  Open:
   other per-scene params (mod matrix etc.) beyond these 10.
 - **NOT yet done:** map Scene
   A/B raw arrays, write-back strategy.

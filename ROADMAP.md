@@ -44,10 +44,10 @@ phone/desktop app. It does the SWD talking; the module is never modified.
 ### Phase 1 — Complete the SWD feature set (ST-Link + Mac, dev)
 - [x] **Read SD file list** through the module (`mg_sd.py`) — names + indices. *(hardware-tested 2026-10-11: 11 files, indices 0–10)*
 - [x] **Load a WAV into the selected sound** — `tools/mg_load.py` via front-panel routine `FUN_0803e710` (hardware-tested 2026-10-11). (`FUN_08012b24` = *load Preset(n+1).mgp*.)
-- [ ] **Load preset N** via `FUN_08012b24(N-1)` — verify on a scratch project with an existing preset.
+- [x] **Load preset N** — `tools/mg_preset.py N` (`FUN_08012b24(N-1)`), verified on Project01 Preset01/02 (2026-10-11). File must exist.
 - [x] **Select sound** (focus, `FUN_08011980`) + **switch playback** (engine event 3) — `mg_load.py --sound N [--play]`, hardware-tested 2026-10-11.
 - [x] Map **Scene A / Scene B raw arrays** — sound struct +0x48.. (A), +0x264 (B); `tools/mg_param.py` (2026-10-11).
-- [x] **Patch write-back** — plain RAM write to the stored scene value; engine follows, no halt (2026-10-11). Knobs JUMP on touch (no pickup). Still to check: autosave persistence.
+- [x] **Patch write-back** — plain RAM write to the stored scene value; engine follows, no halt (2026-10-11). Knobs JUMP on touch (no pickup). Persisted by setting the project-changed flag (state+0x11) → module autosaves; survives power-cycle ✅.
 - [ ] Nice-to-haves: trigger record, save/load project, read slot→file assignments (Sound structs @ base+0x58c, 0x9f0 stride).
 - [ ] Real **unit conversions**: RATE→Hz, SIZE→ms/s, PITCH→semitones, TONE→%, SHAPE→name.
 

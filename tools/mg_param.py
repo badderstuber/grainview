@@ -11,6 +11,8 @@ Usage:
     tools/venv/bin/python tools/mg_param.py                          # all sounds, A/B table
     tools/venv/bin/python tools/mg_param.py --sound 3                # one sound + live values
     tools/venv/bin/python tools/mg_param.py --sound 3 --scene B SIZE 0.75
+                         # (also marks the project changed so the module autosaves it;
+                         #  --no-save to skip)
     tools/venv/bin/python tools/mg_param.py --sound 3 --scene B SIZE 0.75 --wiggle 0.28
                          # alternate 0.75 / 0.28 every 2 s (listening test), then restore
 """
@@ -28,6 +30,10 @@ SOUND_BASE = 0x24020B84
 SOUND_STRIDE = 0x9F0
 SCENE_B = 0x264
 CUR_SOUND = 0x24025B30
+STATE = 0x20008C5C            # engine/UI state block
+AUTOSAVE_ON = STATE + 0x08    # u8 autosave enabled
+DIRTY = STATE + 0x11          # u8 project-changed flag; UI task saves Autosave.mgp
+                              # (FUN_08021bf8) on its next periodic check, then clears it
 PLAYING = 0x20008C70
 # name: (offset in sound struct for scene A, min, max)
 PARAMS = {
@@ -61,6 +67,12 @@ def write(t, snd, scene, name, value):
     t.write_memory(addr(snd, scene, name), u32(value))
 
 
+def mark_dirty(t):
+    """Tell the firmware the project changed so its own autosave persists our
+    plain writes (what the knob/select setters do: dirty = autosave-enabled)."""
+    t.write_memory(DIRTY, t.read_memory(AUTOSAVE_ON, 8), 8)
+
+
 def table(t):
     print("      " + " ".join(f"{n:>6}" for n in PARAMS))
     for snd in range(8):
@@ -90,6 +102,8 @@ def main():
                     help="alternate VALUE/OTHER every --period s, then restore")
     ap.add_argument("--period", type=float, default=2.0)
     ap.add_argument("--times", type=int, default=10)
+    ap.add_argument("--no-save", action="store_true",
+                    help="don't mark the project changed (value lost on power-off)")
     ap.add_argument("--freq", type=int, default=4_000_000)
     a = ap.parse_args()
     if a.value is not None and (a.param is None or a.sound is None):
@@ -112,6 +126,9 @@ def main():
             write(t, snd, a.scene, a.param, clamp(a.value))
             print(f"Sound {a.sound} {a.scene}.{a.param}: {old:+.3f} -> "
                   f"{read(t, snd, a.scene, a.param):+.3f}")
+            if not a.no_save:
+                mark_dirty(t)
+                print("  marked project changed - module will autosave it")
             return
         try:
             for i in range(a.times):
