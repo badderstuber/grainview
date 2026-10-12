@@ -24,6 +24,15 @@ _Last updated: 2026-10-12._
   selected sound's edited scene: all 10 params + 40 mod depths bit-identical (peak-to-peak
   0.00000), zero false heroes. Firmware only writes stored scene values on real knob
   motion, so TOUCH_EPS (0.004) has huge margin.
+- **Sound `+0x4f4` "missing-file" flag — CONFIRMED by offline RE** (no hardware needed).
+  It's a per-sound, persisted, reactive u8 (setter +0x4ec/+0x4f0; deserialized from the
+  .mgp by `FUN_08022d38`, copied in copy-sound `FUN_08039c84`, cleared on sound-clear
+  `FUN_0800927c`). The project/preset reload `FUN_08012a3c` sets it **1 when a sound has a
+  stored filename but the WAV fails to load** (load ok → 0, empty/no name → 0); so
+  non-zero = referenced file missing. (`FUN_080129b0` returns non-zero=success — verified
+  via the audio-length-clear on the 0 path.) Only the reload sets it, not interactive
+  browse-loads — which is why our just-loaded Sound 1 read 0, and why all sounds read 0
+  (every file present). Empirical `1` would need a project pointing at a deleted file.
 - SD/projects confirmed fully disposable (Leo: backed up, do anything). Module left on
   Project02 (session start); throwaway Project05 remains on the card.
 

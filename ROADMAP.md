@@ -70,8 +70,12 @@ phone/desktop app. It does the SWD talking; the module is never modified.
       Collect (`FUN_0801140c(n)`; firmware bug when n ≠ current leaves SD on project n).
 - [ ] Nice-to-haves: trigger record. (slot→file ✅ below)
       ✅ slot→file: `tools/mg_slots.py` **hardware-verified 2026-10-12** (matched the
-      file loaded the day before). +0x4f4 "missing" byte still unverified (all 0 — needs a
-      missing file to test).
+      file loaded the day before). +0x4f4 "missing" byte **CONFIRMED by offline RE
+      2026-10-12**: the project/preset reload (`FUN_08012a3c`) sets it to 1 when a sound has a
+      stored filename but the file fails to load (loaded OK → 0, truly empty → 0), so
+      non-zero = the referenced WAV is missing. Only the reload path sets it (not interactive
+      browse-loads); always 0 here because every file is present. Reactive u8 (setter
+      +0x4ec/+0x4f0), persisted in the .mgp (deserialized by `FUN_08022d38`).
 - [x] **Unit conversions** (2026-10-12) — `tools/gv_units.js`, from the grain engine
       `FUN_08016278` (fs = **48076 Hz**): RATE = v²·130.813 Hz (min 0.25); SIZE = 960 +
       v²·191040 samples (20 ms–4 s); PITCH = v·48−24 st; SHAPE idx thresholds 0.03/0.97

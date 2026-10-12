@@ -7,7 +7,10 @@ RE (1.4.8.0, offsets shared with mg_load.py): sound struct N at
 0x24020b84 + N*0x9f0 holds a source u8 @ +0x59c (0=project folder, 1=/Wavs,
 2=/Recs) and one filename field per source (+0x7dc / +0x6c8 / +0x5b4, 0x100
 bytes, NUL-terminated). Only the field for the current source is meaningful.
-u8 @ +0x4f4 is shown raw: believed to be a "file missing" flag (unverified).
+u8 @ +0x4f4 = "file missing" flag (CONFIRMED by offline RE 2026-10-12): the
+project/preset reload FUN_08012a3c sets it 1 when a sound's stored filename fails
+to load (loaded OK -> 0, empty/no name -> 0). Non-zero = referenced WAV missing.
+Only the reload path sets it (not interactive browse-loads). Reactive + persisted.
 
 Usage:
     tools/venv/bin/python tools/mg_slots.py          # table
