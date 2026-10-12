@@ -32,6 +32,9 @@ Usage:
     tools/venv/bin/python tools/mg_load.py --sound 2         # focus Sound 2, keep playing
     tools/venv/bin/python tools/mg_load.py --sound 2 --play  # focus + switch playback
     tools/venv/bin/python tools/mg_load.py --sound 2 5  # load file 5 into Sound 2, no interruption
+    tools/venv/bin/python tools/mg_load.py --folder wavs     # list /Wavs (any folder)
+    tools/venv/bin/python tools/mg_load.py --folder recs 3   # load Rec [3] (changes the
+                                                             # sound's folder, like ALT+folder)
 """
 import argparse
 import os
@@ -43,6 +46,10 @@ sys.path.insert(0, os.path.dirname(__file__))
 from mg_call import connect, swd_call  # noqa: E402
 
 BROWSE_LOAD_FN = 0x0803E710
+SET_FOLDER_FN = 0x0803E91C    # panel's folder buttons: set sound's folder (setter +
+                              # notify), then BROWSE_LOAD(ui, 0) = load at that folder's
+                              # cursor. An EMPTY sound is reset first (params from the
+                              # template, cursors -> 0 / newest Rec) - see load_plan()
 BROWSER_UI = 0x240452C8      # r0 the UI passes (file-browser screen object)
 SELECT_SOUND_FN = 0x08011980  # set current sound (0-7) + fire change notify
 EV_PLAY_SELECTED = 3          # engine tick: playing sound (0x20008c70) = selected
@@ -61,7 +68,10 @@ SD_STATE = 0x20008CCC
 IDLE_LO, IDLE_HI = 0x0800BA9A, 0x0800BAA0
 FNAME_OFF = {0: 0x7DC, 1: 0x6C8, 2: 0x5B4}   # sound struct filename per folder
 FOLDERS = {0: "project folder", 1: "/Multigrain/Wavs", 2: "/Multigrain/Recs"}
-MAX_FILES = 128
+MAX_FILES = {0: 0x80, 1: 0x80, 2: 0x400}     # list sizes in RAM
+EMPTY_MASK = STATE + 0x40     # u32 bit n = sound n has audio  (FUN_080128a4)
+AUDIO_LEN = 0x20000160 + 0x378  # + n*0x10: u32 sample length  (FUN_080128a4)
+LOST_OFF = 0x4F4              # u8 per sound; non-zero = 0x0803e91c skips the reset
 
 
 def u8(t, a):
@@ -83,7 +93,8 @@ def file_names(t, folder, count):
             raw = bytes(t.read_memory_block8(LISTS[folder] + i * 0x100, 0x100))
             out.append(raw.split(b"\0", 1)[0].decode("latin-1"))
         return out
-    nums = [i32(t, REC_LIST + i * 4) for i in range(count)]
+    nums = [struct.unpack("<i", struct.pack("<I", v))[0]
+            for v in t.read_memory_block32(REC_LIST, count)] if count else []
     return ["Rec%05d.wav" % abs(n) for n in nums]
 
 
@@ -91,10 +102,65 @@ def status(t, snd=None):
     if snd is None:
         snd = u8(t, CUR_SOUND)
     folder = u8(t, SOUND_BASE + snd * SOUND_STRIDE + SRC_OFF)
-    count = u32(t, COUNTS + folder * 4) if folder in FOLDERS else 0
+    count = folder_count(t, folder) if folder in FOLDERS else 0
     cursor = i32(t, CURSORS + (folder * 8 + snd) * 4) if folder in FOLDERS else 0
     sd = u32(t, SD_STATE)
-    return snd, folder, min(count, MAX_FILES), cursor, sd
+    return snd, folder, count, cursor, sd
+
+
+def folder_count(t, folder):
+    return min(u32(t, COUNTS + folder * 4), MAX_FILES[folder])
+
+
+def sound_is_empty(t, snd):
+    """FUN_0803e91c's test for resetting the sound before a folder change:
+    no audio (FUN_080128a4() == 0) and +0x4f4 == 0."""
+    has_audio = (u32(t, EMPTY_MASK) >> snd) & 1 or u32(t, AUDIO_LEN + snd * 0x10)
+    return not has_audio and not u8(t, SOUND_BASE + snd * SOUND_STRIDE + LOST_OFF)
+
+
+def load_plan(t, folder, index):
+    """Checks + prep (no halt) for loading file `index` of `folder` (0 project,
+    1 /Wavs, 2 /Recs) into the CURRENT sound. Returns (func, args, name, fixup):
+    inject func(*args) at the idle loop; if fixup, the sound was empty and the
+    folder change reset its cursor, so call fix_cursor() once that's done.
+    Same folder: browse by delta (the tested path). Other folder: cursor[F] =
+    index, then the panel's folder-button call loads it."""
+    snd, cur_folder, _, cursor, sd = status(t)
+    if folder not in FOLDERS:
+        raise ValueError(f"unknown folder {folder}")
+    count = folder_count(t, folder)
+    if not 0 <= index < count:
+        raise ValueError(f"index {index} out of range (folder has {count} file(s))")
+    if sd in (1, 3):
+        raise ValueError("SD busy" if sd == 1 else "SD error / no card")
+    name = file_names(t, folder, count)[index]
+    if folder == cur_folder:
+        return BROWSE_LOAD_FN, [BROWSER_UI, index - cursor], name, False
+    t.write_memory(CURSORS + (folder * 8 + snd) * 4, index)
+    return SET_FOLDER_FN, [BROWSER_UI, folder], name, sound_is_empty(t, snd)
+
+
+def fix_cursor(t, snd, folder, index, timeout=10.0):
+    """After a folder change on an empty sound (it loaded file 0 / the newest
+    Rec): wait for that load to finish, then load `index`. The cursor write and
+    call happen in ONE halt at the idle loop, so the first call is surely done.
+    Returns True if a second load was injected."""
+    t0 = time.time()
+    time.sleep(0.05)
+    while time.time() - t0 < timeout:
+        if u8(t, SOUND_BASE + snd * SOUND_STRIDE + SRC_OFF) == folder and u32(t, SD_STATE) != 1:
+            break
+        time.sleep(0.02)
+    xpsr = wait_idle_and_halt(t)
+    if xpsr is None:
+        raise RuntimeError("couldn't catch the CPU in the idle loop for the cursor fix")
+    if i32(t, CURSORS + (folder * 8 + snd) * 4) == index or u8(t, CUR_SOUND) != snd:
+        t.resume()
+        return False
+    t.write_memory(CURSORS + (folder * 8 + snd) * 4, index)
+    call_returning_to_idle(t, xpsr, BROWSE_LOAD_FN, [BROWSER_UI, 0])
+    return True
 
 
 def write8(t, addr, v, volatile=False, tries=3):
@@ -190,6 +256,8 @@ def main():
                     help="old load path: halt + wait for return (longer glitch)")
     ap.add_argument("--play", action="store_true",
                     help="also switch playback to the selected sound (engine event 3)")
+    ap.add_argument("--folder", choices=["project", "wavs", "recs"],
+                    help="list/load from this folder (default: the sound's current one)")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--timeout", type=float, default=30.0)
     ap.add_argument("--freq", type=int, default=4_000_000)
@@ -233,6 +301,8 @@ def main():
         snd, folder, count, cursor, sd = status(t, target_snd)
         if folder not in FOLDERS:
             sys.exit(f"Sound {snd + 1}: unknown source byte {folder} - not touching it.")
+        if a.folder and ["project", "wavs", "recs"].index(a.folder) != folder:
+            return load_other_folder(t, a, snd, ["project", "wavs", "recs"].index(a.folder))
         names = file_names(t, folder, count)
         print(f"Sound {snd + 1}   source: {FOLDERS[folder]}   "
               f"{count} file(s)   SD state: {sd}")
@@ -284,6 +354,47 @@ def main():
               f"filename '{fname_field(t, snd, folder)}' (file may be invalid/unsupported)")
     finally:
         session.close()
+
+
+def load_other_folder(t, a, snd, folder):
+    """--folder that isn't the sound's current one: list it, and load via the
+    panel's folder-button call (load_plan / fix_cursor)."""
+    count = folder_count(t, folder)
+    cursor = i32(t, CURSORS + (folder * 8 + snd) * 4)
+    print(f"Sound {snd + 1}   folder: {FOLDERS[folder]} (sound is on "
+          f"{FOLDERS[u8(t, SOUND_BASE + snd * SOUND_STRIDE + SRC_OFF)]})   {count} file(s)")
+    for i, n in enumerate(file_names(t, folder, count)):
+        print(f"  {'>' if i == cursor else ' '}[{i:3d}] {n}")
+    if a.index is None:
+        return
+    if a.dry_run:
+        print(f"\nDRY RUN - would set cursor and call 0x{SET_FOLDER_FN:08x}"
+              f"(0x{BROWSER_UI:08x}, {folder})"
+              + ("  (sound is EMPTY: it gets reset, then a 2nd load)" if sound_is_empty(t, snd) else ""))
+        return
+    if u8(t, CUR_SOUND) != snd:
+        sys.exit("Selected sound changed - not loading.")
+    try:
+        func, args, name, fixup = load_plan(t, folder, a.index)
+    except ValueError as e:
+        sys.exit(str(e))
+    t0 = time.time()
+    xpsr = wait_idle_and_halt(t)
+    if xpsr is None:
+        sys.exit("Couldn't catch the CPU in the idle loop - nothing called.")
+    call_returning_to_idle(t, xpsr, func, args)
+    if fixup and fix_cursor(t, snd, folder, a.index):
+        print("  (sound was empty: loaded twice to land on the right file)")
+    while time.time() - t0 < a.timeout:
+        _, f2, _, c2, sd2 = status(t, snd)
+        if f2 == folder and c2 == a.index and sd2 == 0 and fname_field(t, snd, folder) == name:
+            print(f"\nLOADED {name} from {FOLDERS[folder]} into Sound {snd + 1}  "
+                  f"(done after {(time.time() - t0) * 1000:.0f} ms)")
+            return
+        time.sleep(0.01)
+    _, f2, _, c2, sd2 = status(t, snd)
+    print(f"\nNOT CONFIRMED: folder {f2}, cursor {c2}, SD state {sd2}, "
+          f"filename '{fname_field(t, snd, f2) if f2 in FOLDERS else '?'}'")
 
 
 if __name__ == "__main__":

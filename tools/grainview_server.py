@@ -9,13 +9,19 @@ with the same API, so the UI can't tell them apart:
 
 API (all JSON):
     GET  /state                 module snapshot (see Backend.snapshot)
-    GET  /files                 file list of the SELECTED sound's folder
+    GET  /files[?folder=F]      file list of folder F (project|Wavs|Recs), default
+                                the SELECTED sound's folder
     POST /select  {"sound":0-7}               edit focus (no halt)
     POST /scene   {"scene":"A"|"B"}           edited scene, as the panel's A/B (no halt)
     POST /play    {}                          playback -> selected sound
     POST /param   {"sound","scene","name","value"}
     POST /mod     {"sound","scene","src","name","value"}
-    POST /load    {"index"}                   WAV -> selected sound (one halt)
+    POST /preset  {"action":"load"|"save"|"lock","n":0-47}   (one halt; guarded:
+                                              load/lock need the file, save not if locked)
+    POST /project {"action":"load"|"save","n":0-47}   load = switch (saves the old one
+                                              first, one halt); save = Autosave.mgp now (no halt)
+    POST /load    {"index"[,"folder"]}        WAV -> selected sound (one halt; another
+                                              folder = the sound switches folder, as ALT+folder)
 
 Usage:
     tools/venv/bin/python tools/grainview_server.py --mock
@@ -36,6 +42,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import mg_load as L  # noqa: E402
 import mg_param as P  # noqa: E402
+import mg_preset as PR  # noqa: E402
 
 # Edited scene setter FUN_080114e4(scene) (offline RE 2026-10-12, mirrors the
 # sound setter FUN_08011980): if changed { u8 0x24025b48 = scene; notify via
@@ -55,6 +62,21 @@ G_CLOCK_PERIOD = 0x24020834   # f32 global: smoothed clock period, s (clamped 0.
 NAMES = list(P.PARAMS)            # START SCAN WRAP SIZE RATE PITCH LEVEL TONE SHAPE BLUR
 SRCS = list(P.MOD_SRC)            # RAND X Y Z
 FOLDER_NAMES = {0: "project", 1: "Wavs", 2: "Recs"}
+FOLDER_IDX = {v: k for k, v in FOLDER_NAMES.items()}
+
+
+def slot_arg(n):
+    if not isinstance(n, int) or not 0 <= n < PR.SLOTS:
+        raise ApiError(f"n must be 0..{PR.SLOTS - 1}")
+    return n
+
+
+def folder_arg(f):
+    if f is None or f == "":
+        return None
+    if f not in FOLDER_IDX:
+        raise ApiError(f"folder must be one of {', '.join(FOLDER_IDX)}")
+    return FOLDER_IDX[f]
 
 
 class ApiError(Exception):
@@ -86,9 +108,12 @@ class MockBackend:
 
     def __init__(self):
         rnd = random.Random(7)
-        self.files = ["vox.wav", "drum_loop.wav", "pad_long.wav", "field_rec.wav",
-                      "bass_sub.wav", "glass_hit.wav", "choir_ah.wav", "noise_fl.wav",
-                      "perc_01.wav", "strings.wav", "vinyl.wav", "leo-bangla-stabs.wav"]
+        self.lists = {0: ["01-kick-loop.wav", "02-pad.wav", "03-vox-chop.wav"],
+                      1: ["vox.wav", "drum_loop.wav", "pad_long.wav", "field_rec.wav",
+                          "bass_sub.wav", "glass_hit.wav", "choir_ah.wav", "noise_fl.wav",
+                          "perc_01.wav", "strings.wav", "vinyl.wav", "leo-bangla-stabs.wav"],
+                      2: ["Rec%05d.wav" % n for n in (1, 2, 5)]}
+        self.files = self.lists[1]
         self.selected = 0
         self.playing = 0
         self.edit_scene = "A"
@@ -105,9 +130,11 @@ class MockBackend:
             mod = {sc: {s: {k: 0.0 for k in NAMES} for s in SRCS} for sc in "AB"}
             mod["A"]["RAND"]["SIZE"] = 0.4
             mod["B"]["X"]["PITCH"] = -0.25
-            self.sounds.append({"folder": 1, "cursor": cur if cur is not None else 0,
+            self.sounds.append({"folder": 1, "cursors": {0: 0, 1: cur or 0, 2: 2},
                                 "file": None if cur is None else self.files[cur],
                                 "scenes": scenes, "mod": mod})
+        self.store = {"project": 0, "projects": [0, 1, 2, 3, 8], "presets": [0, 1, 4],
+                      "locked": [1], "preset": 0}
         self.lock = threading.Lock()
 
     def snapshot(self):
@@ -119,17 +146,19 @@ class MockBackend:
                 "mode": self.mode, "connected": True, "error": None,
                 "selected": self.selected, "playing": self.playing,
                 "edit_scene": self.edit_scene, "morph": m, "sd_state": self.sd_state, "live": live,
+                "store": json.loads(json.dumps(self.store)),
                 "sounds": [{"folder": FOLDER_NAMES[s["folder"]], "file": s["file"],
-                            "cursor": s["cursor"], "A": dict(s["scenes"]["A"]),
+                            "cursor": s["cursors"][s["folder"]], "A": dict(s["scenes"]["A"]),
                             "B": dict(s["scenes"]["B"]),
                             "mod": json.loads(json.dumps(s["mod"]))}
                            for s in self.sounds],
             }
 
-    def file_list(self):
+    def file_list(self, folder=None):
         s = self.sounds[self.selected]
-        return {"sound": self.selected, "folder": FOLDER_NAMES[s["folder"]],
-                "cursor": s["cursor"], "names": list(self.files)}
+        f = s["folder"] if folder is None else folder
+        return {"sound": self.selected, "folder": FOLDER_NAMES[f],
+                "cursor": s["cursors"][f], "names": list(self.lists[f])}
 
     def select(self, sound):
         check_args(sound=sound)
@@ -155,22 +184,64 @@ class MockBackend:
         with self.lock:
             self.sounds[sound]["mod"][scene][src][name] = min(max(float(value), -1.0), 1.0)
 
-    def load(self, index):
+    def load(self, index, folder=None):
         with self.lock:
-            if not 0 <= index < len(self.files):
-                raise ApiError(f"index out of range 0..{len(self.files) - 1}")
+            snd = self.sounds[self.selected]
+            f = snd["folder"] if folder is None else folder
+            names = self.lists[f]
+            if not 0 <= index < len(names):
+                raise ApiError(f"index out of range 0..{len(names) - 1}")
             if self.sd_state:
                 raise ApiError("SD busy")
             self.sd_state = 1
-            snd = self.sounds[self.selected]
 
         def finish():
             time.sleep(1.2)                  # real loads take ~0.1-1.5 s
             with self.lock:
-                snd["cursor"], snd["file"] = index, self.files[index]
+                snd["folder"], snd["cursors"][f], snd["file"] = f, index, names[index]
                 self.sd_state = 0
         threading.Thread(target=finish, daemon=True).start()
-        return {"loading": self.files[index]}
+        return {"loading": names[index]}
+
+    def _sd_job(self, secs, fn):
+        with self.lock:
+            if self.sd_state:
+                raise ApiError("SD busy")
+            self.sd_state = 1
+
+        def finish():
+            time.sleep(secs)
+            with self.lock:
+                fn(self.store)
+                self.sd_state = 0
+        threading.Thread(target=finish, daemon=True).start()
+
+    def preset(self, action, n):
+        st = self.store
+        n = slot_arg(n)
+        if action in ("load", "lock") and n not in st["presets"]:
+            raise ApiError(f"Preset{n + 1:02d} doesn't exist")
+        if action == "load":
+            self._sd_job(1.2, lambda s: s.update(preset=n))
+        elif action == "save":
+            if n in st["locked"]:
+                raise ApiError(f"Preset{n + 1:02d} is locked")
+            self._sd_job(0.6, lambda s: s.update(preset=n, presets=sorted(set(s["presets"]) | {n})))
+        elif action == "lock":
+            self._sd_job(0.2, lambda s: s.update(locked=sorted(set(s["locked"]) ^ {n})))
+        else:
+            raise ApiError("action must be load, save or lock")
+
+    def project(self, action, n):
+        n = slot_arg(n)
+        if action == "save":
+            self._sd_job(0.4, lambda s: None)
+        elif action == "load":
+            if n not in self.store["projects"]:
+                raise ApiError(f"Project{n + 1:02d} doesn't exist")
+            self._sd_job(2.5, lambda s: s.update(project=n, preset=0, presets=[0, 1], locked=[]))
+        else:
+            raise ApiError("action must be load or save")
 
 
 # ---- live SWD backend (built on mg_param / mg_load) --------------------------
@@ -254,6 +325,8 @@ class SwdBackend:
             "size_mode": L.u8(t, G_SIZE_MODE), "sync": L.u8(t, G_SYNC),
             "clock_period": round(P.f32(t.read_memory(G_CLOCK_PERIOD)), 5),
             "live": {k: round(P.f32(t.read_memory(P.LIVE[k])), 4) for k in NAMES},
+            "store": {k: v for k, v in PR.status(t).items()
+                      if k in ("project", "projects", "presets", "locked", "preset")},
             "sounds": sounds,
         }
 
@@ -270,12 +343,17 @@ class SwdBackend:
         poll (else the UI snaps back to the old value for a frame). Lock held."""
         self.snap = {**self.snap, **kw}
 
-    def file_list(self):
+    def file_list(self, folder=None):
         with self.lock:
             t = self._target()
-            snd, folder, count, cursor, _ = L.status(t)
+            snd, cur, count, cursor, _ = L.status(t)
+            if folder is None:
+                folder = cur
             if folder not in L.FOLDERS:
                 raise ApiError(f"unknown source byte {folder}")
+            if folder != cur:
+                count = L.folder_count(t, folder)
+                cursor = L.i32(t, L.CURSORS + (folder * 8 + snd) * 4)
             return {"sound": snd, "folder": FOLDER_NAMES[folder], "cursor": cursor,
                     "names": L.file_names(t, folder, count)}
 
@@ -315,25 +393,57 @@ class SwdBackend:
             P.sync_panel(t, sound, scene, name, v, src=src)
             P.mark_dirty(t)
 
-    def load(self, index):
+    def load(self, index, folder=None):
         """Same one-halt call as mg_load.py; returns once the call is injected.
-        The UI watches sd_state / the sound's file in /state for completion."""
+        The UI watches sd_state / the sound's file in /state for completion.
+        Another folder: the sound switches folder (mg_load.load_plan); if it was
+        empty, a thread does the cursor fix-up load once the first one's done."""
         with self.lock:
             t = self._target()
-            snd, folder, count, cursor, sd = L.status(t)
-            if folder not in L.FOLDERS:
-                raise ApiError(f"unknown source byte {folder}")
-            if not 0 <= index < count:
-                raise ApiError(f"index out of range 0..{count - 1}")
-            if sd in (1, 3):
-                raise ApiError("SD busy" if sd == 1 else "SD error / no card")
-            name = L.file_names(t, folder, count)[index]
+            snd, cur, *_ = L.status(t)
+            if cur not in L.FOLDERS:
+                raise ApiError(f"unknown source byte {cur}")
+            try:
+                func, args, name, fixup = L.load_plan(t, cur if folder is None else folder, index)
+            except ValueError as e:
+                raise ApiError(str(e)) from None
             xpsr = L.wait_idle_and_halt(t)
             if xpsr is None:
                 raise ApiError("couldn't catch the CPU in the idle loop - nothing called")
-            L.call_returning_to_idle(t, xpsr, L.BROWSE_LOAD_FN,
-                                     [L.BROWSER_UI, index - cursor])
-            return {"loading": name}
+            L.call_returning_to_idle(t, xpsr, func, args)
+        if fixup:
+            def fix():
+                with self.lock:
+                    try:
+                        L.fix_cursor(self.t, snd, folder, index)
+                    except Exception:            # noqa: BLE001
+                        traceback.print_exc()
+            threading.Thread(target=fix, daemon=True).start()
+        return {"loading": name}
+
+    def preset(self, action, n):
+        n = slot_arg(n)
+        fn = {"load": PR.load_preset, "save": PR.save_preset, "lock": PR.toggle_lock}.get(action)
+        if fn is None:
+            raise ApiError("action must be load, save or lock")
+        with self.lock:
+            try:
+                fn(self._target(), n)
+            except ValueError as e:
+                raise ApiError(str(e)) from None
+
+    def project(self, action, n):
+        with self.lock:
+            t = self._target()
+            try:
+                if action == "save":
+                    PR.autosave_now(t)
+                elif action == "load":
+                    PR.load_project(t, slot_arg(n))
+                else:
+                    raise ApiError("action must be load or save")
+            except ValueError as e:
+                raise ApiError(str(e)) from None
 
 
 # ---- HTTP -------------------------------------------------------------------
@@ -383,7 +493,8 @@ def make_handler(be):
             elif path == "/state":
                 self._send(200, be.snapshot())
             elif path == "/files":
-                self._run(be.file_list)
+                q = dict(kv.split("=", 1) for kv in self.path.partition("?")[2].split("&") if "=" in kv)
+                self._run(lambda: be.file_list(folder_arg(q.get("folder"))))
             else:
                 self._send(404, {"ok": False, "error": "not found"})
 
@@ -401,7 +512,9 @@ def make_handler(be):
                                                a.get("name"), a.get("value")),
                 "/mod": lambda: be.set_mod(a.get("sound"), a.get("scene"), a.get("src"),
                                            a.get("name"), a.get("value")),
-                "/load": lambda: be.load(int(a.get("index", -1))),
+                "/preset": lambda: be.preset(a.get("action"), a.get("n")),
+                "/project": lambda: be.project(a.get("action"), a.get("n", 0)),
+                "/load": lambda: be.load(int(a.get("index", -1)), folder_arg(a.get("folder"))),
             }
             fn = routes.get(self.path)
             if fn is None:

@@ -67,7 +67,7 @@
       <li><span class="k">BACK</span> / <kbd>Esc</kbd> — up a level</li>
       <li><span class="k">SOUND‹ ›</span> / <kbd>,</kbd><kbd>.</kbd> — change sound (1–8)</li>
       <li><span class="k">SCENE</span> / <kbd>B</kbd> — A / B</li>
-      <li><span class="k">FILE</span> / <kbd>F</kbd> — load / save</li>
+      <li><span class="k">FILE</span> / <kbd>F</kbd> — the card, opens on the sound's folder. <code>..</code> or BACK = up to the root (PROJECT / WAVS / RECS / PRESETS / PROJECTS). FILE again = quick jump to the next folder</li>
     </ul>
     <h2>Model</h2>
     <ul>
@@ -75,6 +75,7 @@
       <li><span class="k">PARM</span> / <span class="k">MOD</span> are view-only — turn the module's knobs, watch here.</li>
       <li>In <span class="k">SET</span>, push to dive in, turn to move, BACK to exit.</li>
       <li>SOUND / SCENE apply across every view. FILE opens its own screen.</li>
+      <li>PRESETS / PROJECTS: push a slot for LOAD / SAVE / LOCK (or OPEN / SAVE NOW). Overwriting a preset needs a 2nd push; locked ones can't be saved over.</li>
       <li>Turn a knob on the Multigrain → its value shows big for 1.5 s (SET › Knob view).</li>
     </ul>
     <div style="color:#6b767d;font-size:12px;margin-top:10px">This is the firmware spec. Served by
@@ -125,7 +126,7 @@ async function poll(){
 
 // ---------- UI state ----------
 const st={view:'WAVE', overlay:null, dived:false, sound:0, scene:'A', selPlays:false,
-  files:[], folder:'', fileCur:0, setCur:0, flash:null, flashT:0, busy:0, localT:0,
+  files:[], folder:'', rootCounts:{}, filesOk:false, filesReq:0, fileCur:0, menu:null, setCur:0, flash:null, flashT:0, busy:0, localT:0,
   fontSet:FONT_SETS[localStorage.gvFontSet]?localStorage.gvFontSet:'Spleen',
   touchOn:localStorage.gvTouch!=='0', touch:null};
 const VIEWS=['WAVE','PARM','MOD','SET'];
@@ -192,14 +193,47 @@ function vSet(b){const {M}=fs(),top=header(b),bot=status(b,'SET',st.dived?'PUSH 
   SETTINGS.forEach(([lab,val],i)=>{const y=top+i*rh,on=st.dived&&st.setCur===i,v=val();
     if(y+rh>bot)return;if(on)rect(b,0,y,W,rh,15);
     text(b,M,lab,2,y+1+fm.asc(M),on?0:11);textR(b,M,v,W-2,y+1+fm.asc(M),on?0:15);});}
-function vFile(b){const {M}=fs(),top=header(b),F=st.files;
-  const bot=status(b,'FILE /'+(st.folder||'').toUpperCase(),F.length?(st.fileCur+1)+'/'+F.length:'-');
-  const rh=fm.lh(M)+1,rows=Math.floor((bot-top)/rh);
-  if(!F.length){text(b,M,M_&&M_.sd_state===3?'SD error':'loading list...',2,top+fm.asc(M)+2,8);return;}
-  const first=Math.max(0,Math.min(st.fileCur-(rows>>1),F.length-rows));
+function isStore(f=st.folder){return f==='PRESETS'||f==='PROJECTS';}
+function store(){return (M_&&M_.store)||{projects:[],presets:[],locked:[],project:null,preset:null};}
+// one slot row: NN name ...... tags  (empty slots dim)
+function slotRow(b,y,rh,i,on){const {T,M}=fs(),S=store(),pre=st.folder==='PRESETS',
+    have=(pre?S.presets:S.projects).includes(i),cur=(pre?S.preset:S.project)===i,lock=pre&&S.locked.includes(i);
+  if(on)rect(b,0,y,W,rh,15);
+  const nn=String(i+1).padStart(2,'0'),ty=y+fm.asc(M)-(fm.asc(M)-fm.asc(T));
+  text(b,T,nn,2,ty,on?0:7);const x=4+textW(T,'00')+3;
+  const tags=(lock?'LCK ':'')+(cur?'CUR':'');
+  if(tags.trim())textR(b,T,tags.trim(),W-2,ty,on?0:(cur?15:8));
+  const name=have?(pre?'Preset':'Project')+nn:'- empty -';
+  text(b,M,fit(M,name,W-x-4-(tags.trim()?textW(T,tags.trim())+3:0)),x,y+fm.asc(M),on?0:have?12:5);}
+function vMenu(b){const {T,M}=fs(),m=st.menu,rh=fm.lh(M)+2,lt=fm.lh(T)+2;
+  const w=Math.max(textW(T,m.title),...m.items.map(it=>textW(M,it[0])))+14,h=lt+m.items.length*rh+4,
+        x=(W-w)>>1,y=(H-h)>>1;
+  rect(b,x-1,y-1,w+2,h+2,0);frame(b,x,y,w,h,15);
+  text(b,T,m.armed!=null?'PUSH AGAIN':m.title,x+4,y+2+fm.asc(T),m.armed!=null?15:9);
+  m.items.forEach(([lab],i)=>{const yy=y+lt+2+i*rh,on=i===m.cur;
+    if(on)rect(b,x+2,yy,w-4,rh,15);text(b,M,lab,x+5,yy+1+fm.asc(M),on?0:12);});}
+// root row: NAME ...... count [CUR]   (CUR = the selected sound's WAV folder)
+function rootRow(b,y,rh,f,on){const {T,M}=fs(),S=store(),s=snd();
+  if(on)rect(b,0,y,W,rh,15);
+  const n=isStore(f)?(f==='PRESETS'?S.presets:S.projects).length:st.rootCounts[f],
+        tag=(s&&s.folder===f?'CUR ':'')+(n==null?'':n),ty=y+fm.asc(M)-(fm.asc(M)-fm.asc(T));
+  text(b,M,'/'+FNAME[f],2,y+fm.asc(M),on?0:12);textR(b,T,tag.trim(),W-2,ty,on?0:8);}
+// list rows run from -1 ('..' = up to the root; not at the root itself)
+function fileLo(){return st.folder==='ROOT'?0:-1;}
+function vFile(b){const {M}=fs(),top=header(b),F=st.files,root=st.folder==='ROOT';
+  const bot=status(b,'FILE /'+(root?'':FNAME[st.folder]||''),
+    root||!F.length||st.fileCur<0?'':(st.fileCur+1)+'/'+F.length);
+  const rh=fm.lh(M)+1,rows=Math.floor((bot-top)/rh),lo=fileLo(),n=F.length-lo;
+  const first=lo+Math.max(0,Math.min(st.fileCur-lo-(rows>>1),n-rows));
   for(let r=0;r<rows&&first+r<F.length;r++){const i=first+r,y=top+r*rh,on=i===st.fileCur;
+    if(i<0){if(on)rect(b,0,y,W,rh,15);text(b,M,'..',2,y+fm.asc(M),on?0:9);
+      if(!F.length)text(b,M,M_&&M_.sd_state===3?'SD error':st.filesOk?'empty folder':'loading list...',2,y+rh+fm.asc(M)+2,8);
+      continue;}
+    if(root){rootRow(b,y,rh,F[i],on);continue;}
+    if(isStore()){slotRow(b,y,rh,i,on);continue;}
     if(on)rect(b,0,y,W,rh,15);
-    text(b,M,fit(M,F[i],W-4),2,y+fm.asc(M),on?0:12);}}
+    text(b,M,fit(M,F[i],W-4),2,y+fm.asc(M),on?0:12);}
+  if(st.menu)vMenu(b);}
 function box(b,msg,label){const {T,M}=fs(),m=fit(M,msg,W-14),lt=label?fm.lh(T)+1:0;
   const w=Math.max(textW(M,m),label?textW(T,label):0)+10,h=fm.lh(M)+6+lt,x=(W-w)>>1,y=(H-h)>>1;
   rect(b,x-1,y-1,w+2,h+2,0);rect(b,x,y,w,h,15);
@@ -269,26 +303,32 @@ function calib(d){sz.pxPerMm*=1+d*0.01;applySize();}
 // ---------- interaction ----------
 function clamp(v,a,b){return Math.max(a,Math.min(b,v));}
 function enc(d){
-  if(st.overlay==='FILE')st.fileCur=clamp(st.fileCur+d,0,Math.max(0,st.files.length-1));
+  if(st.overlay==='FILE'&&st.menu){st.menu.cur=clamp(st.menu.cur+d,0,st.menu.items.length-1);st.menu.armed=null;}
+  else if(st.overlay==='FILE')st.fileCur=clamp(st.fileCur+d,fileLo(),Math.max(fileLo(),st.files.length-1));
   else if(st.view==='SET'&&st.dived)st.setCur=clamp(st.setCur+d,0,SETTINGS.length-1);
   else st.view=VIEWS[clamp(VIEWS.indexOf(st.view)+d,0,VIEWS.length-1)];  // page views (clamped)
   render();
 }
 function push(){
-  if(st.overlay==='FILE')doLoad();
+  if(st.overlay==='FILE'&&st.menu)menuPush();
+  else if(st.overlay==='FILE'&&st.fileCur<0)openRoot(st.folder);
+  else if(st.overlay==='FILE'&&st.folder==='ROOT')openFiles(st.files[st.fileCur]);
+  else if(st.overlay==='FILE'&&isStore())openMenu();
+  else if(st.overlay==='FILE')doLoad();
   else if(st.view==='SET'){ if(!st.dived)st.dived=true;
     else if(SETTINGS[st.setCur][2])SETTINGS[st.setCur][2](); else flash('read-only'); }
   else flash(st.view==='WAVE'?'-':'view-only');
   render();
 }
 function btn(n){
-  if(n==='BACK'){ if(st.overlay)st.overlay=null; else if(st.dived)st.dived=false; else st.view='WAVE'; }
+  if(n==='BACK'){ if(st.menu)st.menu=null; else if(st.overlay==='FILE'&&st.folder!=='ROOT')openRoot(st.folder);
+    else if(st.overlay)st.overlay=null; else if(st.dived)st.dived=false; else st.view='WAVE'; }
   else if(n==='VIEW'){ st.overlay=null;st.dived=false;
     st.view=VIEWS[(VIEWS.indexOf(st.view)+1)%VIEWS.length]; }   // cycle (wraps)
   else if(n==='SCENE')selectScene(st.scene==='A'?'B':'A');
   else if(n==='SOUNDL')selectSound((st.sound+7)%8);
   else if(n==='SOUNDR')selectSound((st.sound+1)%8);
-  else if(n==='FILE')openFiles();
+  else if(n==='FILE')openFiles(st.overlay==='FILE'?FOLDERS[(FOLDERS.indexOf(st.folder)+1)%FOLDERS.length]:undefined);  // root -> first folder
   render();
 }
 // SOUND‹› = edit focus on the module; "Sel plays" also switches playback
@@ -302,14 +342,51 @@ async function selectScene(s){
   st.scene=s;st.busy++;st.localT=Date.now();
   try{await api('/scene',{scene:s});}catch(e){flash(e.message);}
   finally{st.busy--;st.localT=Date.now();}}
-async function openFiles(){
-  st.overlay='FILE';st.files=[];st.folder='';render();
-  try{const j=await api('/files');st.files=j.names;st.folder=j.folder;
-    st.fileCur=clamp(j.cursor,0,Math.max(0,j.names.length-1));}
-  catch(e){st.overlay=null;flash(e.message);}
+// FILE opens on the sound's own folder; FILE again steps through the folders.
+// Loading from another folder switches the sound to it (as ALT+folder on the panel).
+// PRESETS / PROJECTS = the 48 slots of each, from /state (no fetch).
+const FOLDERS=['project','Wavs','Recs','PRESETS','PROJECTS'];
+const FNAME={project:'PROJECT',Wavs:'WAVS',Recs:'RECS',PRESETS:'PRESETS',PROJECTS:'PROJECTS'};
+// root of the card; cursor on the folder we came up from. WAV counts fetched fresh.
+async function openRoot(from){
+  const req=++st.filesReq;st.menu=null;
+  st.overlay='FILE';st.folder='ROOT';st.files=FOLDERS.slice();st.filesOk=true;
+  st.fileCur=Math.max(0,FOLDERS.indexOf(from));render();
+  for(const f of FOLDERS.slice(0,3))
+    try{const j=await api('/files?folder='+f);if(req!==st.filesReq)return;st.rootCounts[f]=j.names.length;render();}
+    catch(e){}}
+async function openFiles(folder){
+  const req=++st.filesReq;st.menu=null;
+  st.overlay='FILE';st.files=[];st.filesOk=false;st.folder=folder||'';st.fileCur=-1;
+  if(isStore(folder)){const S=store(),c=folder==='PRESETS'?S.preset:S.project;
+    st.files=Array.from({length:48},(_,i)=>i);st.filesOk=true;st.fileCur=c==null?0:c;render();return;}
+  render();
+  try{const j=await api('/files'+(folder?'?folder='+folder:''));if(req!==st.filesReq)return;
+    st.files=j.names;st.folder=j.folder;st.filesOk=true;
+    st.fileCur=j.names.length?clamp(j.cursor,0,j.names.length-1):-1;}
+  catch(e){if(req===st.filesReq){st.overlay=null;flash(e.message);}}
   render();}
 async function doLoad(){const f=st.files[st.fileCur];if(f===undefined)return;
-  try{await api('/load',{index:st.fileCur});st.overlay=null;flash(f,'LOADING');}
+  try{await api('/load',{index:st.fileCur,folder:st.folder});st.overlay=null;flash(f,'LOADING');}
+  catch(e){flash(e.message);}}
+// slot menu: [label, action] - action returns a promise; 'confirm' items need a 2nd push
+function openMenu(){const S=store(),n=st.fileCur,nn=String(n+1).padStart(2,'0');let items=[];
+  if(st.folder==='PRESETS'){const have=S.presets.includes(n),lock=S.locked.includes(n);
+    if(have)items.push(['LOAD',()=>storeDo('/preset',{action:'load',n},'Preset'+nn,'LOADING',true)]);
+    if(!lock)items.push([have?'OVERWRITE':'SAVE',()=>storeDo('/preset',{action:'save',n},'Preset'+nn,'SAVING'),have]);
+    if(have)items.push([lock?'UNLOCK':'LOCK',()=>storeDo('/preset',{action:'lock',n},'Preset'+nn,lock?'UNLOCKING':'LOCKING')]);
+    st.menu={title:'PRESET '+nn,items,cur:0,armed:null};}
+  else{if(!S.projects.includes(n))return flash('empty slot');
+    if(S.project===n)items.push(['SAVE NOW',()=>storeDo('/project',{action:'save',n},'Project'+nn,'SAVING')]);
+    else items.push(['OPEN',()=>storeDo('/project',{action:'load',n},'Project'+nn,'OPENING',true)]);
+    st.menu={title:'PROJECT '+nn,items,cur:0,armed:null};}
+  items.push(['BACK',null]);}
+function menuPush(){const m=st.menu,[,fn,confirm]=m.items[m.cur];
+  if(!fn){st.menu=null;return;}
+  if(confirm&&m.armed!==m.cur){m.armed=m.cur;return;}
+  st.menu=null;fn();}
+async function storeDo(path,body,what,label,close){
+  try{await api(path,body);if(close)st.overlay=null;flash(what,label);}
   catch(e){flash(e.message);}}
 function flash(m,label){st.flash=m;st.flashLabel=label||null;st.flashT=Date.now()+1100;setTimeout(render,1150);render();}
 

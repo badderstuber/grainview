@@ -9,6 +9,19 @@ _Last updated: 2026-10-12._
 
 ---
 
+## Update 2026-10-12 (evening) — any-folder WAV load, presets + projects
+
+- **WAV from any folder:** `mg_load.py --folder project|wavs|recs [N]`; GRAINVIEW FILE
+  opens on the sound's folder; `..` / BACK = up to a root list (PROJECT, WAVS, RECS,
+  PRESETS, PROJECTS + counts, CUR = sound's folder); FILE again = quick jump to the next
+  folder (Leo: the FILE-cycle alone felt too "magic"). HW-tested.
+- **Presets / projects:** `mg_preset.py` save / lock / load / switch project / autosave,
+  all HW-tested. In GRAINVIEW (decided with Leo: "FILE hub"): PRESETS / PROJECTS pages list
+  the 48 slots (CUR / LCK tags, empty dim); push a slot → LOAD / SAVE|OVERWRITE / LOCK, or
+  OPEN / SAVE NOW. Overwrite needs a 2nd push; locked can't be saved over. Server:
+  `POST /preset {action,n}`, `POST /project {action,n}`, `/state.store`.
+- Addresses + functions: ROADMAP Phase 1.
+
 ## Update 2026-10-12 (later) — module back: Phase 1 finished, app live on hardware
 
 - `mg_slots.py` verified; live GRAINVIEW backend verified end to end (see ROADMAP Phase 2).

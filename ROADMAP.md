@@ -49,7 +49,24 @@ phone/desktop app. It does the SWD talking; the module is never modified.
 - [x] Map **Scene A / Scene B raw arrays** — sound struct +0x48.. (A), +0x264 (B); `tools/mg_param.py` (2026-10-11).
 - [x] **Patch write-back** — plain RAM write to the stored scene value; engine follows, no halt (2026-10-11). Knobs JUMP on touch (no pickup). Persisted by setting the project-changed flag (state+0x11) → module autosaves; survives power-cycle ✅.
 - [x] **Mod matrix** (RAND/X/Y/Z → params, per scene) — read + write via `mg_param.py --mod` (2026-10-11).
-- [ ] Nice-to-haves: trigger record, save/load project, read slot→file assignments (Sound structs @ base+0x58c, 0x9f0 stride).
+- [x] **Load a WAV from any folder** (project / Wavs / Recs) — `mg_load.py --folder wavs|recs|project N`
+      via the panel's folder-button routine `FUN_0803e91c(ui, F)` (sets the sound's folder
+      +0x59c with notify, then loads at cursor[F]). **Hardware-tested 2026-10-12** (Sound 5:
+      project → Wavs → project). Empty-sound path (firmware resets the sound + cursors, we
+      do a 2nd load) and Recs (card had none) untested. Recs names = `Rec%05d.wav` of the
+      int list. Firmware bug: a Rec load copies the name to 0x30000000+cursor*0x100, so Rec
+      index ≥ 8 overwrites project-list names in RAM (panel does the same) - re-read lists.
+- [x] **Presets + projects** — `tools/mg_preset.py` (status / N / `--save` / `--lock` /
+      `--project` / `--autosave`), all **hardware-tested 2026-10-12** on Project01/02:
+      save `FUN_08011450(n)` (autosave + write; refuses locked), lock toggle `FUN_0801e924(n)`
+      (Preset%02d.lck), project switch `FUN_08012c54(n, 1)` (saves outgoing first), autosave
+      now = state+0x11 = 1 + tick state+0x0c = 10000 (no halt). 48 slots each. Bitmaps
+      u32[2]: preset exists 0x240312e0, locked 0x240312e8, project exists 0x240312f4; current
+      preset u8 0x24025b18 (>47 none), project u8 0x24025c74 (UI) / u32 0x20008cc4 (SD).
+      Guards: load/lock need the exists-bit (missing preset = blank sounds; missing project
+      = new empty one), UI and SD project must match. Not done: delete `FUN_0801e834(n)`,
+      Collect (`FUN_0801140c(n)`; firmware bug when n ≠ current leaves SD on project n).
+- [ ] Nice-to-haves: trigger record. (slot→file ✅ below)
       ✅ slot→file: `tools/mg_slots.py` **hardware-verified 2026-10-12** (matched the
       file loaded the day before). +0x4f4 "missing" byte still unverified (all 0 — needs a
       missing file to test).
