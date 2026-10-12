@@ -50,16 +50,39 @@ phone/desktop app. It does the SWD talking; the module is never modified.
 - [x] **Patch write-back** — plain RAM write to the stored scene value; engine follows, no halt (2026-10-11). Knobs JUMP on touch (no pickup). Persisted by setting the project-changed flag (state+0x11) → module autosaves; survives power-cycle ✅.
 - [x] **Mod matrix** (RAND/X/Y/Z → params, per scene) — read + write via `mg_param.py --mod` (2026-10-11).
 - [ ] Nice-to-haves: trigger record, save/load project, read slot→file assignments (Sound structs @ base+0x58c, 0x9f0 stride).
+      ⏸ PARKED 2026-10-11 (module away): `tools/mg_slots.py` written (slot→file table, `--json`),
+      import-checked but **not yet run on hardware**. +0x4f4 "missing" byte shown raw — verify it.
 - [ ] Real **unit conversions**: RATE→Hz, SIZE→ms/s, PITCH→semitones, TONE→%, SHAPE→name.
+      ⏸ PARKED 2026-10-11. Offline-RE only (no module needed): DSP reads the live block via
+      base 0x20000000 + offset, so literal xrefs find nothing — needs a Ghidra pass on the
+      audio IRQ path.
 
-### Phase 2 — The app UI (responsive web: desktop + phone)
-- [ ] One responsive web app (works in desktop + phone browsers) served locally,
-      later by the bridge. Evolve `demo_app.html` into the real thing.
-- [ ] Views: **live mirror** (8 sounds, Scene A/B + MORPH, granular params, mod
-      matrix, waveform) + **SD browser** (file list, load-into-slot) + patch
-      management.
-- [ ] Backend API (`/state`, `/meta`, `/sd`, `/load`, `/call`) decoupled from
-      transport so it works over USB now and WiFi later.
+### Phase 2 — The app = live GRAINVIEW emulator (decided 2026-10-12)
+The big responsive dashboard (`demo_app.html`) is an **old concept — dropped**.
+Phase 2 grows `tools/grainview_emulator.html` into the real app: the same
+128×128 screen + 6 buttons + encoder, driven by live module data. One UX,
+designed once here, then ported to LVGL on the Pico (Phase 3).
+- [x] Backend `tools/grainview_server.py` (2026-10-12): serves the emulator at `/` +
+      JSON API `GET /state /files`, `POST /select /play /param /mod /load`.
+      `--mock` = in-memory fake module (tested end-to-end, headless Chrome).
+      Live SWD backend reuses mg_param/mg_load helpers — **written, NOT yet run on hardware**.
+- [x] Emulator wired to the API: header (file, ▸ playing), WAVE markers + MORPH, PARM, MOD
+      grid, SET ("Sel plays" toggle), FILE list → load. Values normalized for now.
+- [ ] Hardware test of the live backend (poll rate: 8 sounds' block reads @ 5 Hz — check
+      it keeps up and nothing glitches).
+- [x] **Decided 2026-10-12: no per-param editing in GRAINVIEW.** Knobs on the module
+      are faster + playable, and GRAINVIEW shows the value while you turn. App-set
+      values would also be lost on knob touch (JUMP takeover). PARM + MOD are views.
+      `/param` + `/mod` stay in the API (no UI); `mg_param.py` covers CLI writes.
+- [ ] Maybe later (one-press actions, not editing): MOD push on a cell = clear routing
+      (exact 0 is fiddly on a bipolar knob); copy scene A→B / sound→sound
+      (`FUN_08012edc`), reset scene.
+- [x] **Decided 2026-10-12: A/B is synced with the module both ways** (= the panel's
+      edited scene, u8 `0x24025b48`; NOT MORPH). Setter found offline: `FUN_080114e4`
+      (store + notify + state+0x30 = 0). `POST /scene` does the stores without the
+      notify (like select). Mock-tested; **hardware check:** panel A/B LEDs + knob LEDs
+      follow? If not, read the notify invoker ptr @ `0x24025b44`.
+- [ ] Real waveform for WAVE (needs sample data location in RAM, or read the WAV off SD).
 
 ### Phase 3 — Dedicated "Screen" eurorack module (clutter-free endgame) ⭐
 A standalone RP2040-powered module with its own TFT + encoder/buttons that sits
@@ -80,6 +103,12 @@ web app over WiFi as an optional big-screen view.)
 
 ### GRAINVIEW spec — LOCKED 2026-10-11
 - **Display:** 128×128 **greyscale** OLED (SSD1327, 1.5"). Elektron-style mono look.
+  Active area 26.7 mm square (1.5" = diagonal), ~0.21 mm pixels.
+  **Readability confirmed 2026-10-12:** Intellijel Metropolix uses a ~1.3" 128×64 OLED
+  (~0.23 mm pixels, ~5 px status text) and Leo found it easy to read in use → same
+  pitch, twice the rows. Browser preview at actual size looks worse than the real
+  panel (blurry system font). Text plan: bitmap fonts; **6×12 for must-read** (file
+  names, values), 5×7 for secondary; big shapes for glance info (Metropolix style).
 - **Size:** 8 HP × 3U (4.03 cm × 12.85 cm).
 - **Brain:** RP2040 (Pico / Pico W), SWD master via PIO; LVGL UI.
 - **Controls:** push-encoder + **6 buttons** — BACK, VIEW, FILE, SOUND‹, SOUND›,
@@ -90,6 +119,8 @@ web app over WiFi as an optional big-screen view.)
 - **Interaction model:** encoder turn = page views / navigate; push = dive-in /
   select; BACK = up a level; SOUND‹› & SCENE A/B are global (apply across views);
   FILE opens the SD browser overlay. No long-press / chords (keep it obvious).
+- **Role (decided 2026-10-12):** display + file/sound/preset browser. GRAINVIEW
+  never edits single params — the module's knobs do that; PARM/MOD are views.
 - **Focus vs playback (decided 2026-10-11):** SOUND‹› moves *edit focus* only
   (`FUN_08011980`) — playing sound keeps going, so you can browse/load/tweak
   another sound silently. SET option **"Select also plays"** (default OFF) adds

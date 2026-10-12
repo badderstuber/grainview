@@ -9,6 +9,11 @@
   h1{font-size:16px;margin:0 0 2px}
   .sub{color:#7d8893;font-size:12px;margin-bottom:16px}
   .device{background:#17191c;border:1px solid #2a3137;border-radius:14px;padding:20px;width:max-content}
+  .sizebar{display:flex;align-items:center;gap:8px;margin-bottom:12px;font-size:12px;color:#7d8893}
+  .sizebar button{min-width:0;padding:5px 9px}
+  #calib{display:none;align-items:center;gap:6px}
+  #ruler{height:6px;background:#c9d2d8;border-radius:1px}
+  canvas.actual{image-rendering:auto}
   canvas{image-rendering:pixelated;border-radius:6px;box-shadow:0 0 0 3px #000,0 8px 26px rgba(0,0,0,.55);display:block;margin:0 auto}
   .controls{margin-top:20px;display:flex;flex-direction:column;align-items:center;gap:12px}
   .enc{display:flex;align-items:center;gap:10px}
@@ -27,7 +32,15 @@
 <body>
   <div class="device">
     <h1>GRAINVIEW</h1>
-    <div class="sub">module emulator · 128×128 greyscale · MOCK data</div>
+    <div class="sub">module emulator · 128×128 greyscale · <span id="link">connecting…</span></div>
+    <div class="sizebar">
+      <button id="sizebtn" onclick="toggleSize()">ZOOM 3.5×</button>
+      <span id="calib">
+        <span id="ruler"></span><span>= 50 mm?</span>
+        <button onclick="calib(-1)" title="ruler too long">−</button>
+        <button onclick="calib(1)" title="ruler too short">+</button>
+      </span>
+    </div>
     <canvas id="oled" width="448" height="448"></canvas>
     <div class="controls">
       <div class="enc">
@@ -60,33 +73,51 @@
     <h2>Model</h2>
     <ul>
       <li>VIEW button <em>and</em> encoder both switch the 4 views (tab strip up top).</li>
-      <li>In <span class="k">MOD</span> / <span class="k">SET</span>, push to dive in, turn to move, BACK to exit.</li>
+      <li><span class="k">PARM</span> / <span class="k">MOD</span> are view-only — turn the module's knobs, watch here.</li>
+      <li>In <span class="k">SET</span>, push to dive in, turn to move, BACK to exit.</li>
       <li>SOUND / SCENE apply across every view. FILE opens its own screen.</li>
     </ul>
-    <div style="color:#6b767d;font-size:12px;margin-top:10px">This is the firmware spec. Tell me what to re-flow.</div>
+    <div style="color:#6b767d;font-size:12px;margin-top:10px">This is the firmware spec. Served by
+      <code>grainview_server.py</code> (<code>--mock</code> = no module). Values are normalized until
+      unit conversions are mapped; the waveform is synthetic.</div>
   </div>
 
 <script>
-// ---------- mock data ----------
-const FILES=['vox.wav','drum_loop.wav','pad_long.wav','field_rec.wav','bass_sub.wav',
-  'glass_hit.wav','choir_ah.wav','noise_fl.wav','perc_01.wav','strings.wav','vinyl.wav','rain.wav'];
-const SOUND_NAMES=['vox.wav','drum_loop.wav','pad_long.wav','— empty —','bass_sub.wav','glass_hit.wav','choir_ah.wav','— empty —'];
+// ---------- module data (polled from grainview_server.py) ----------
 const PKEYS=['START','WRAP','SCAN','SHAPE','SIZE','RATE','PITCH','TONE','LEVEL','BLUR','MORPH'];
-const SOURCES=['R','X','Y','Z'];
-const SETTINGS=[['Brightness','80%'],['Sync Clock','INT'],['Scene Link','OFF'],
-  ['Grain Meter','ON'],['Screen Flip','OFF'],['Firmware','1.4.8.0']];
-function pval(snd,scene,k){const base=(snd*7+PKEYS.indexOf(k)*13+(scene==='B'?5:0));
-  if(k==='SHAPE')return ['BELL','SINC','TRI','DECAY','RAMP','TUKEY','SQ'][base%7];
-  if(k==='SIZE')return (40+base%400)+'ms'; if(k==='RATE')return (2+base%28)+'.'+(base%9)+'Hz';
-  if(k==='PITCH')return (base%2?'+':'-')+(base%13); if(k==='MORPH')return '0.'+(60+base%39);
-  if(k==='SCAN'||k==='TONE')return (base%2?'+':'-')+'.'+(base%9);
-  return '0.'+(10+base%89);}
-function mval(snd,scene,src,k){const b=(snd+PKEYS.indexOf(k)+SOURCES.indexOf(src)*3+(scene==='B'?2:0));
-  if(b%3===0)return '0'; return (b%2?'+':'-')+'.'+(1+b%8);}
+const MKEYS=PKEYS.slice(0,10);                  // mod matrix has no MORPH row
+const SOURCES=['RAND','X','Y','Z'];
+const BIPOLAR={SCAN:1,TONE:1};
+let M=null;                                     // last /state snapshot
+const SETTINGS=[                                // [label, value fn, toggle fn | null]
+  ['Sel plays',()=>st.selPlays?'ON':'OFF',()=>{st.selPlays=!st.selPlays;}],
+  ['Link',()=>M?(M.mode+(M.connected?'':' ✕')):'—',null],
+  ['Firmware',()=>'1.4.8.0',null]];
+// normalized until unit conversions are mapped: unipolar .42, bipolar +.42
+function fmt(v,bip){if(v==null)return '—';const a=Math.abs(v),
+  s=a>=0.995?'1.0':'.'+String(Math.round(a*100)).padStart(2,'0');
+  return bip?(v<0?'-':'+')+s:s;}
+function snd(){return M&&M.sounds&&M.sounds[st.sound];}
+function pval(k){if(k==='MORPH')return fmt(M&&M.morph);const s=snd();return fmt(s&&s[st.scene][k],BIPOLAR[k]);}
+function mval(src,k){const s=snd(),v=s&&s.mod[st.scene][src][k];return v?fmt(v,true):'0';}
+function pnum(k){const s=snd();return s?s[st.scene][k]:0;}
+
+async function api(path,body){
+  const r=await fetch(path,body===undefined?{}:{method:'POST',body:JSON.stringify(body)});
+  const j=await r.json(); if(!j.ok&&j.error)throw new Error(j.error); return j;}
+async function poll(){
+  const t0=Date.now();
+  try{M=await (await fetch('/state')).json();
+    // skip polls that began before (or during) our last local change - they're stale
+    if(M.connected&&st.busy===0&&t0>st.localT){st.sound=M.selected;st.scene=M.edit_scene||st.scene;}}
+  catch(e){M=null;}
+  document.getElementById('link').textContent=!M?'server not running':
+    M.connected?(M.mode==='mock'?'MOCK module':'LIVE module'):('no link: '+M.error);
+  render();setTimeout(poll,150);}
 
 // ---------- UI state ----------
-const st={view:'WAVE', overlay:null, dived:false, sound:0, scene:'A',
-  fileCur:0, setCur:0, modR:0, modC:0, flash:null, flashT:0};
+const st={view:'WAVE', overlay:null, dived:false, sound:0, scene:'A', selPlays:false,
+  files:[], folder:'', fileCur:0, setCur:0, flash:null, flashT:0, busy:0, localT:0};
 const VIEWS=['WAVE','PARM','MOD','SET'];
 const TABS=['WAVE','PARM','MOD','SET'];
 
@@ -99,7 +130,8 @@ function T(c,s,x,y,px,b,bold){c.fillStyle='rgb('+b+','+b+','+b+')';
   c.font=(bold?'bold ':'')+px+'px ui-monospace,Menlo,monospace';c.textBaseline='top';c.fillText(s,x,y);}
 function box(c,x,y,w,h){c.fillStyle='rgb(70,70,70)';c.fillRect(x,y,w,1);c.fillRect(x,y+h-1,w,1);c.fillRect(x,y,1,h);c.fillRect(x+w-1,y,1,h);}
 function inv(c,x,y,w,h){c.fillStyle='rgb(230,230,230)';c.fillRect(x,y,w,h);}
-function wave(c,x,y,w,h,seed){const n=w,d=makeWave(n,seed),mid=y+h/2,s=0.18,e=0.72,sc=0.46;
+// window = START..START+WRAP (placeholder reading of WRAP), dotted line = SCAN
+function wave(c,x,y,w,h,seed,s,e,sc){const n=w,d=makeWave(n,seed),mid=y+h/2;
   for(let i=0;i<n;i++){const amp=d[i]*(h/2-1),win=(i/n)>=s&&(i/n)<=e;
     c.fillStyle=win?'rgb(150,150,150)':'rgb(60,60,60)';c.fillRect(x+i,mid-amp,1,amp*2);
     c.fillStyle=win?'rgb(255,255,255)':'rgb(135,135,135)';c.fillRect(x+i,mid-amp,1,1);c.fillRect(x+i,mid+amp-1,1,1);}
@@ -112,52 +144,58 @@ function chrome(c){
   for(let i=0;i<4;i++){const x=i*tw,cur=VIEWS[i]===st.view;
     if(cur)inv(c,x,0,tw,11);T(c,TABS[i],x+5,2,8,cur?20:120,true);}
   c.fillStyle='rgb(60,60,60)';c.fillRect(0,11,128,1);
+  const s=snd(),name=s&&s.file?s.file:'— empty —';
   T(c,'S'+(st.sound+1),2,13,9,255,true);
-  T(c,SOUND_NAMES[st.sound],22,14,8,SOUND_NAMES[st.sound][0]==='—'?90:200,false);
+  if(M&&M.playing===st.sound)T(c,'▸',15,13,9,255,true);       // this sound is playing
+  T(c,name.length>15?name.slice(0,14)+'…':name,22,14,8,s&&s.file?200:90,false);
   inv(c,116,13,11,10);T(c,st.scene,119,14,8,20,true);
   c.fillStyle='rgb(40,40,40)';c.fillRect(0,24,128,1);
 }
+function seedOf(str){let h=0;for(const ch of str||'')h=(h*31+ch.charCodeAt(0))>>>0;return 1+h%9;}
 
 // ---------- views ----------
 function vWave(c){chrome(c);
-  wave(c,3,30,122,46,st.sound+1);
+  const s=snd(),st0=pnum('START');
+  if(s&&s.file)wave(c,3,30,122,46,seedOf(s.file),st0,Math.min(1,st0+pnum('WRAP')),(pnum('SCAN')+1)/2);
+  else T(c,'no sample',40,48,9,90,false);
   T(c,'MORPH',3,86,7,120,false);box(c,44,86,80,8);
-  c.fillStyle='rgb(220,220,220)';c.fillRect(45,87,Math.round(80*0.62),6);
-  T(c,'START .18',3,100,8,170,false);T(c,'WRAP .72',66,100,8,170,false);
-  T(c,'SCAN +.04',3,112,8,170,false);T(c,'SIZE 240ms',66,112,8,170,false);
+  c.fillStyle='rgb(220,220,220)';c.fillRect(45,87,Math.round(78*(M&&M.morph||0)),6);
+  T(c,'START '+pval('START'),3,100,8,170,false);T(c,'WRAP '+pval('WRAP'),66,100,8,170,false);
+  T(c,'SCAN '+pval('SCAN'),3,112,8,170,false);T(c,'SIZE '+pval('SIZE'),66,112,8,170,false);
 }
 function vParm(c){chrome(c);
   const cw=63,ch=16;
   for(let i=0;i<PKEYS.length;i++){const cx=(i%2)*cw+1,cy=28+Math.floor(i/2)*ch;
     box(c,cx,cy,cw-1,ch-1);T(c,PKEYS[i],cx+3,cy+2,7,120,false);
-    T(c,pval(st.sound,st.scene,PKEYS[i]),cx+3,cy+ch-10,9,255,true);}
+    T(c,pval(PKEYS[i]),cx+3,cy+ch-10,9,255,true);}
 }
 function vMod(c){chrome(c);
   const lx=2,c0=30,cwm=24;
-  for(let s=0;s<4;s++)T(c,SOURCES[s],c0+s*cwm+8,26,8,150,true);
-  for(let r=0;r<PKEYS.length;r++){const y=36+r*8;
-    T(c,PKEYS[r].slice(0,4),lx,y,7,st.dived&&st.modR===r?255:150,false);
-    for(let s=0;s<4;s++){const x=c0+s*cwm;const sel=st.dived&&st.modR===r&&st.modC===s;
-      if(sel)inv(c,x,y-1,cwm-1,8);
-      T(c,mval(st.sound,st.scene,SOURCES[s],PKEYS[r]),x+1,y,7,sel?20:200,false);}}
-  if(!st.dived)T(c,'push: edit grid',2,118,7,110,false);
+  for(let s=0;s<4;s++)T(c,SOURCES[s][0],c0+s*cwm+8,26,8,150,true);
+  for(let r=0;r<MKEYS.length;r++){const y=36+r*8;   // view-only: routings bright, empty dim
+    T(c,MKEYS[r].slice(0,4),lx,y,7,150,false);
+    for(let s=0;s<4;s++){const v=mval(SOURCES[s],MKEYS[r]);
+      T(c,v==='0'?'·':v,c0+s*cwm+(v==='0'?8:1),y,7,v==='0'?70:240,v!=='0');}}
 }
 function vSet(c){chrome(c);
-  for(let i=0;i<SETTINGS.length;i++){const y=28+i*14,sel=st.dived&&st.setCur===i;
+  for(let i=0;i<SETTINGS.length;i++){const y=28+i*14,sel=st.dived&&st.setCur===i,v=SETTINGS[i][1]();
     if(sel)inv(c,1,y-1,126,13);
     T(c,SETTINGS[i][0],4,y+1,9,sel?30:200,false);
-    T(c,SETTINGS[i][1],128-String(SETTINGS[i][1]).length*6-4,y+1,9,sel?20:255,true);}
+    T(c,v,128-String(v).length*6-4,y+1,9,sel?20:255,true);}
   if(!st.dived)T(c,'push: edit settings',2,118,7,110,false);
 }
 function vFile(c){
-  T(c,'FILE  /Wavs',3,2,10,255,true);T(c,'('+FILES.length+')',128-5*6,4,7,150,false);
+  const F=st.files;
+  T(c,'FILE  /'+st.folder,3,2,10,255,true);T(c,'('+F.length+')',128-5*6,4,7,150,false);
   c.fillStyle='rgb(60,60,60)';c.fillRect(0,15,128,1);
-  const rows=8,top=Math.max(0,Math.min(st.fileCur-4,FILES.length-rows));
-  for(let r=0;r<rows&&top+r<FILES.length;r++){const i=top+r,y=18+r*11,sel=st.fileCur===i;
-    if(sel)inv(c,1,y-1,126,11);T(c,FILES[i],4,y,9,sel?20:220,false);}
+  if(!F.length)T(c,M&&M.sd_state===3?'SD error':'loading list…',4,30,9,150,false);
+  const rows=8,top=Math.max(0,Math.min(st.fileCur-4,F.length-rows));
+  for(let r=0;r<rows&&top+r<F.length;r++){const i=top+r,y=18+r*11,sel=st.fileCur===i;
+    if(sel)inv(c,1,y-1,126,11);T(c,F[i],4,y,9,sel?20:220,false);}
   c.fillStyle='rgb(60,60,60)';c.fillRect(0,108,128,1);
-  T(c,'push = load → S'+(st.sound+1),3,113,8,150,false);
+  T(c,M&&M.sd_state===1?'SD busy…':'push = load → S'+(st.sound+1),3,113,8,150,false);
 }
+function noLink(c){inv(c,8,54,112,22);T(c,M?'NO MODULE LINK':'NO SERVER',14,62,9,20,true);}
 function flashBox(c){inv(c,8,54,112,22);T(c,st.flash,14,62,9,20,true);}
 
 // ---------- render ----------
@@ -168,42 +206,78 @@ function render(){
   if(st.overlay==='FILE')vFile(c);
   else ({WAVE:vWave,PARM:vParm,MOD:vMod,SET:vSet}[st.view])(c);
   if(st.flash&&Date.now()<st.flashT)flashBox(c);
+  else if(!M||!M.connected)noLink(c);
   const im=c.getImageData(0,0,128,128),d=im.data;
   for(let i=0;i<d.length;i+=4){let l=0.299*d[i]+0.587*d[i+1]+0.114*d[i+2];
     let q=Math.round(l/255*15)/15*255;d[i]=Math.round(q*0.92);d[i+1]=Math.round(q*0.98);d[i+2]=q;}
   c.putImageData(im,0,0);
-  ctx.imageSmoothingEnabled=false;ctx.clearRect(0,0,cv.width,cv.height);ctx.drawImage(off,0,0,cv.width,cv.height);
+  ctx.imageSmoothingEnabled=sz.actual;ctx.clearRect(0,0,cv.width,cv.height);ctx.drawImage(off,0,0,cv.width,cv.height);
 }
+
+// ---------- zoom / actual size ----------
+// ACTUAL = the SSD1327's 26.7 mm active area at real size. Browsers assume
+// 96 CSS px/inch, real screens differ, so the ruler calibrates px/mm (saved).
+// Backing store = device pixels, smoothed: the eye can't see sub-pixel OLED dots.
+const OLED_MM=26.7,RULER_MM=50;
+const sz={actual:localStorage.gvActual==='1',pxPerMm:+localStorage.gvPxPerMm||96/25.4};
+function applySize(){
+  const css=sz.actual?OLED_MM*sz.pxPerMm:448,dev=Math.round(css*(sz.actual?devicePixelRatio:1));
+  cv.width=cv.height=dev;cv.style.width=cv.style.height=css+'px';
+  cv.classList.toggle('actual',sz.actual);
+  document.getElementById('sizebtn').textContent=sz.actual?'ACTUAL SIZE':'ZOOM 3.5×';
+  document.getElementById('calib').style.display=sz.actual?'flex':'none';
+  document.getElementById('ruler').style.width=RULER_MM*sz.pxPerMm+'px';
+  localStorage.gvActual=sz.actual?'1':'0';localStorage.gvPxPerMm=sz.pxPerMm;
+  render();}
+function toggleSize(){sz.actual=!sz.actual;applySize();}
+function calib(d){sz.pxPerMm*=1+d*0.01;applySize();}
 
 // ---------- interaction ----------
 function clamp(v,a,b){return Math.max(a,Math.min(b,v));}
 function enc(d){
-  if(st.overlay==='FILE')st.fileCur=clamp(st.fileCur+d,0,FILES.length-1);
-  else if(st.view==='MOD'&&st.dived){let idx=clamp(st.modR*4+st.modC+d,0,PKEYS.length*4-1);
-    st.modR=Math.floor(idx/4);st.modC=idx%4;}
+  if(st.overlay==='FILE')st.fileCur=clamp(st.fileCur+d,0,Math.max(0,st.files.length-1));
   else if(st.view==='SET'&&st.dived)st.setCur=clamp(st.setCur+d,0,SETTINGS.length-1);
   else st.view=VIEWS[clamp(VIEWS.indexOf(st.view)+d,0,VIEWS.length-1)];  // page views (clamped)
   render();
 }
 function push(){
   if(st.overlay==='FILE')doLoad();
-  else if(st.view==='MOD')st.dived=!st.dived;
-  else if(st.view==='SET'){ if(st.dived)flash('toggle '+SETTINGS[st.setCur][0]); else st.dived=true; }
-  else flash(st.view==='PARM'?'view-only':'—');
+  else if(st.view==='SET'){ if(!st.dived)st.dived=true;
+    else if(SETTINGS[st.setCur][2])SETTINGS[st.setCur][2](); else flash('read-only'); }
+  else flash(st.view==='WAVE'?'—':'view-only');
   render();
 }
 function btn(n){
   if(n==='BACK'){ if(st.overlay)st.overlay=null; else if(st.dived)st.dived=false; else st.view='WAVE'; }
   else if(n==='VIEW'){ st.overlay=null;st.dived=false;
     st.view=VIEWS[(VIEWS.indexOf(st.view)+1)%VIEWS.length]; }   // cycle (wraps)
-  else if(n==='SCENE')st.scene=st.scene==='A'?'B':'A';
-  else if(n==='SOUNDL')st.sound=(st.sound+7)%8;
-  else if(n==='SOUNDR')st.sound=(st.sound+1)%8;
-  else if(n==='FILE'){st.overlay='FILE';st.fileCur=0;}
+  else if(n==='SCENE')selectScene(st.scene==='A'?'B':'A');
+  else if(n==='SOUNDL')selectSound((st.sound+7)%8);
+  else if(n==='SOUNDR')selectSound((st.sound+1)%8);
+  else if(n==='FILE')openFiles();
   render();
 }
-function doLoad(){const f=FILES[st.fileCur];SOUND_NAMES[st.sound]=f;st.overlay=null;flash('LOADED '+f);}
-function flash(m){st.flash=m;st.flashT=Date.now()+1100;setTimeout(render,1150);}
+// SOUND‹› = edit focus on the module; "Sel plays" also switches playback
+async function selectSound(n){
+  st.sound=n;st.busy++;st.localT=Date.now();
+  try{await api('/select',{sound:n});if(st.selPlays)await api('/play',{});}
+  catch(e){flash(e.message);}
+  finally{st.busy--;st.localT=Date.now();}}
+// A/B = the module's edited scene (kept in sync both ways via /state)
+async function selectScene(s){
+  st.scene=s;st.busy++;st.localT=Date.now();
+  try{await api('/scene',{scene:s});}catch(e){flash(e.message);}
+  finally{st.busy--;st.localT=Date.now();}}
+async function openFiles(){
+  st.overlay='FILE';st.files=[];st.folder='';render();
+  try{const j=await api('/files');st.files=j.names;st.folder=j.folder;
+    st.fileCur=clamp(j.cursor,0,Math.max(0,j.names.length-1));}
+  catch(e){st.overlay=null;flash(e.message);}
+  render();}
+async function doLoad(){const f=st.files[st.fileCur];if(f===undefined)return;
+  try{await api('/load',{index:st.fileCur});st.overlay=null;flash('LOADING '+f);}
+  catch(e){flash(e.message);}}
+function flash(m){st.flash=m.length>17?m.slice(0,16)+'…':m;st.flashT=Date.now()+1100;setTimeout(render,1150);render();}
 
 document.addEventListener('keydown',e=>{const k=e.key.toLowerCase();
   if(e.key==='ArrowUp'||e.key==='ArrowLeft'){enc(-1);e.preventDefault();}
@@ -213,7 +287,7 @@ document.addEventListener('keydown',e=>{const k=e.key.toLowerCase();
   else if(k===',')btn('SOUNDL'); else if(k==='.')btn('SOUNDR');
   else if(k==='b')btn('SCENE'); else if(k==='f')btn('FILE'); else if(k==='v')btn('VIEW');});
 cv.addEventListener('wheel',e=>{enc(e.deltaY>0?1:-1);e.preventDefault();},{passive:false});
-render();
+applySize();poll();
 </script>
 </body>
 </html>

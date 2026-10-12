@@ -5,7 +5,21 @@ Multigrain** (3U granular sampler) — it's hard to use without a screen and the
 audio-file workflow is confusing. This file is the single place to pick the
 project back up if I lose the chat session.
 
-_Last updated: 2026-10-11._
+_Last updated: 2026-10-12._
+
+---
+
+## Update 2026-10-12 — Phase 2 started (module away)
+
+- **Phase 2 = the GRAINVIEW emulator, live.** The old dashboard (`demo_app.html`)
+  concept is dropped.
+- New **`tools/grainview_server.py`**: serves `grainview_emulator.html` + JSON API.
+  `--mock` (fake module) tested end to end; live SWD backend written on top of the
+  mg_param/mg_load helpers but **not yet hardware-tested**. Port 8745.
+- Emulator now polls `/state` (no more hard-coded mock data); SOUND‹› selects on
+  the module, FILE lists the real folder and loads, SET has "Sel plays".
+- Parked Phase 1 items (need module / offline RE): `tools/mg_slots.py` (written,
+  untested) and unit conversions. See ROADMAP.md.
 
 ---
 
@@ -151,8 +165,6 @@ _Last updated: 2026-10-11._
   `mg_param.py` now syncs the LED when the panel shows the written value
   (same sound + edited scene + mode/source) — yellow↔purple confirmed ✅.
   UX note: app/GRAINVIEW must show *edited* scene and *heard* (MORPH) separately.
-- **NOT yet done:** map Scene
-  A/B raw arrays, write-back strategy.
 - **Endgame direction chosen (Leo's idea):** a dedicated **"GRAINVIEW" screen
   eurorack module** — RP2040 + **128×128 greyscale OLED (SSD1327)** + push-encoder
   + 4 buttons, **8 HP**, bus-powered, 4-wire SWD ribbon to JTRACE. The Pico is the
