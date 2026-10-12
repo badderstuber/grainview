@@ -138,7 +138,8 @@ def sync_panel(t, snd, scene, name, value, src=None):
 def mark_dirty(t):
     """Tell the firmware the project changed so its own autosave persists our
     plain writes (what the knob/select setters do: dirty = autosave-enabled)."""
-    t.write_memory(DIRTY, t.read_memory(AUTOSAVE_ON, 8), 8)
+    from mg_load import write8                       # firmware clears it too
+    write8(t, DIRTY, t.read_memory(AUTOSAVE_ON, 8), volatile=True)
 
 
 def table(t):

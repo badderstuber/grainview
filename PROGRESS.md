@@ -9,6 +9,18 @@ _Last updated: 2026-10-12._
 
 ---
 
+## Update 2026-10-12 (later) — module back: Phase 1 finished, app live on hardware
+
+- `mg_slots.py` verified; live GRAINVIEW backend verified end to end (see ROADMAP Phase 2).
+  Run live: `tools/venv/bin/python tools/grainview_server.py [--port N]`.
+- ST-Link "Write verification error" on 1-byte writes = firmware changing the byte
+  between write and read-back; `mg_load.write8()` handles it (use it for all u8 writes).
+- **Unit conversions done** (`tools/gv_units.js`), engine fs 48076 Hz. Engine object
+  0x20000570 = live param block base (START at +0x8c = 0x5fc). Settings flags per sound:
+  +0x53d RATE-SIZE link, +0x525 SIZE-PITCH link, +0x8f1 pitch quantizer mode, u16
+  +0x554 note mask, +0x90c pitch offset; global: 0x24025dc5 SIZE max mode, 0x24025bc1
+  sync enable (hardware-confirmed: 1 once SYNC is enabled), f32 0x24020834 clock period (s). Full RE notes: ROADMAP Phase 1.
+
 ## Update 2026-10-12 — Phase 2 started (module away)
 
 - **Phase 2 = the GRAINVIEW emulator, live.** The old dashboard (`demo_app.html`)

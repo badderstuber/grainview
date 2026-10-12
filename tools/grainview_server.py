@@ -29,6 +29,7 @@ import random
 import sys
 import threading
 import time
+import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -43,6 +44,13 @@ import mg_param as P  # noqa: E402
 # select_nohalt(). UNTESTED on hardware: check the panel's A/B LEDs + knob LEDs
 # follow; if not, read the invoker ptr @ 0x24025b44 and see what it does.
 SCENE_FLAG = L.STATE + 0x30
+# Engine mode flags (offline RE 2026-10-12, FUN_0801a49c fills the engine's
+# settings from these each tick). Per-sound = offset in the sound struct.
+FLAG_LINK_RS = 0x53D          # u8 per sound: RATE-SIZE link (1 = on)
+FLAG_LINK_SP = 0x525          # u8 per sound: SIZE-PITCH link (1 = on)
+G_SIZE_MODE = 0x24025DC5      # u8 global: SIZE max-length mode (0 = 4 s default)
+G_SYNC = 0x24025BC1           # u8 global: RATE sync to clock (1 = on, if a clock is present)
+G_CLOCK_PERIOD = 0x24020834   # f32 global: smoothed clock period, s (clamped 0.05..2)
 
 NAMES = list(P.PARAMS)            # START SCAN WRAP SIZE RATE PITCH LEVEL TONE SHAPE BLUR
 SRCS = list(P.MOD_SRC)            # RAND X Y Z
@@ -193,12 +201,12 @@ class SwdBackend:
     def _poll(self):
         while True:
             try:
-                with self.lock:
-                    if self.t is None:
-                        self._connect()
-                    snap = self._read()
-                self.snap = snap
-                time.sleep(self.period)
+                t0 = time.time()
+                with self.lock:                  # publish under the lock, so a read that
+                    if self.t is None:           # started before an action's write can't
+                        self._connect()          # overwrite its _patch() afterwards
+                    self.snap = self._read()
+                time.sleep(max(0.0, self.period - (time.time() - t0)))
             except Exception as ex:          # noqa: BLE001 - surface + retry
                 self.snap = {"mode": self.mode, "connected": False, "error": str(ex),
                              "sounds": self.snap.get("sounds", [])}
@@ -235,6 +243,7 @@ class SwdBackend:
                 "mod": mod,
                 "file": (L.fname_field(t, n, folder) or None) if known else None,
                 "cursor": L.i32(t, L.CURSORS + (folder * 8 + n) * 4) if known else None,
+                "link_rs": L.u8(t, base + FLAG_LINK_RS), "link_sp": L.u8(t, base + FLAG_LINK_SP),
             })
         return {
             "mode": self.mode, "connected": True, "error": None,
@@ -242,6 +251,8 @@ class SwdBackend:
             "edit_scene": "B" if L.u8(t, P.EDIT_SCENE) else "A",
             "morph": round(P.f32(t.read_memory(P.LIVE["MORPH"])), 4),
             "sd_state": L.u32(t, L.SD_STATE),
+            "size_mode": L.u8(t, G_SIZE_MODE), "sync": L.u8(t, G_SYNC),
+            "clock_period": round(P.f32(t.read_memory(G_CLOCK_PERIOD)), 5),
             "live": {k: round(P.f32(t.read_memory(P.LIVE[k])), 4) for k in NAMES},
             "sounds": sounds,
         }
@@ -253,6 +264,11 @@ class SwdBackend:
 
     def snapshot(self):
         return self.snap
+
+    def _patch(self, **kw):
+        """After a write, show it in /state at once instead of after the next
+        poll (else the UI snaps back to the old value for a frame). Lock held."""
+        self.snap = {**self.snap, **kw}
 
     def file_list(self):
         with self.lock:
@@ -267,18 +283,21 @@ class SwdBackend:
         check_args(sound=sound)
         with self.lock:
             L.select_nohalt(self._target(), sound)
+            self._patch(selected=sound)
 
     def set_scene(self, scene):
         check_args(scene=scene)
         with self.lock:
             t = self._target()
-            t.write_memory(P.EDIT_SCENE, 1 if scene == "B" else 0, 8)
-            t.write_memory(SCENE_FLAG, 0, 8)
+            L.write8(t, P.EDIT_SCENE, 1 if scene == "B" else 0)
+            L.write8(t, SCENE_FLAG, 0, volatile=True)
+            self._patch(edit_scene=scene)
 
     def play(self):
         with self.lock:
             if not L.post_event_nohalt(self._target(), L.EV_PLAY_SELECTED):
                 raise ApiError("engine didn't take the play event - try again")
+            self._patch(playing=L.u32(self.t, L.PLAYING))
 
     def set_param(self, sound, scene, name, value):
         check_args(sound, scene, name)
@@ -323,6 +342,7 @@ STATIC = {
     "/font_compare.html": ("font_compare.html", "text/html; charset=utf-8"),
     "/fonts/gv_fonts.js": ("fonts/gv_fonts.js", "text/javascript; charset=utf-8"),
     "/gv_draw.js": ("gv_draw.js", "text/javascript; charset=utf-8"),
+    "/gv_units.js": ("gv_units.js", "text/javascript; charset=utf-8"),
 }
 
 
@@ -349,6 +369,7 @@ def make_handler(be):
             except ApiError as e:
                 self._send(400, {"ok": False, "error": str(e)})
             except Exception as e:           # noqa: BLE001 - report, keep serving
+                traceback.print_exc()
                 self._send(500, {"ok": False, "error": f"{type(e).__name__}: {e}"})
 
         def do_GET(self):

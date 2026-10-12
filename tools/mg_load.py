@@ -97,6 +97,24 @@ def status(t, snd=None):
     return snd, folder, min(count, MAX_FILES), cursor, sd
 
 
+def write8(t, addr, v, volatile=False, tries=3):
+    """1-byte write while the CPU runs. The ST-Link reads each byte back to verify;
+    if the firmware changes that byte in between, it reports 'Write verification
+    error' though our write went out. volatile=True: the firmware also writes this
+    byte (flags), so that's fine. Otherwise confirm by reading back, retry."""
+    from pyocd.core.exceptions import ProbeError
+    for i in range(tries):
+        try:
+            t.write_memory(addr, v, 8)
+            return
+        except ProbeError as e:
+            if "verification" not in str(e):
+                raise
+            if volatile or u8(t, addr) == v:
+                return
+    raise RuntimeError(f"write 0x{addr:08x} = {v} didn't stick after {tries} tries")
+
+
 def select_nohalt(t, n):
     """Select sound n without halting (no audio glitch).
 
@@ -104,8 +122,8 @@ def select_nohalt(t, n):
     (+0x40), which tested unnecessary: LEDs + knobs follow anyway (2026-10-11).
     Also does the notify's other step: engine state +0x11 = +0x08.
     """
-    t.write_memory(CUR_SOUND, n, 8)
-    t.write_memory(STATE + 0x11, u8(t, STATE + 0x08), 8)
+    write8(t, CUR_SOUND, n)
+    write8(t, STATE + 0x11, u8(t, STATE + 0x08), volatile=True)
 
 
 def post_event_nohalt(t, n, timeout=0.5):

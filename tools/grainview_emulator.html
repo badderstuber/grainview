@@ -78,12 +78,12 @@
       <li>Turn a knob on the Multigrain → its value shows big for 1.5 s (SET › Knob view).</li>
     </ul>
     <div style="color:#6b767d;font-size:12px;margin-top:10px">This is the firmware spec. Served by
-      <code>grainview_server.py</code> (<code>--mock</code> = no module). Values are normalized until
-      unit conversions are mapped; the waveform is synthetic.</div>
+      <code>grainview_server.py</code> (<code>--mock</code> = no module). Param values in real units from the firmware (<code>gv_units.js</code>); the waveform is synthetic.</div>
   </div>
 
 <script src="fonts/gv_fonts.js"></script>
 <script src="gv_draw.js"></script>
+<script src="gv_units.js"></script>
 <script>
 // ---------- module data (polled from grainview_server.py) ----------
 const PKEYS=['START','WRAP','SCAN','SHAPE','SIZE','RATE','PITCH','TONE','LEVEL','BLUR','MORPH'];
@@ -102,7 +102,10 @@ function fmt(v,bip){if(v==null)return '-';const a=Math.abs(v),
   s=a>=0.995?'1.0':'.'+String(Math.round(a*100)).padStart(2,'0');
   return bip?(v<0?'-':'+')+s:s;}
 function snd(){return M_&&M_.sounds&&M_.sounds[st.sound];}
-function pval(k){if(k==='MORPH')return fmt(M_&&M_.morph);const s=snd();return fmt(s&&s[st.scene][k],BIPOLAR[k]);}
+// params in real units (gv_units.js); mod depths stay normalized (fmt)
+function uctx(sc=st.scene){const s=snd();return s?{linkRS:s.link_rs===1,linkSP:s.link_sp===1,sync:M_&&M_.sync===1,
+  size:s[sc].SIZE,pitch:s[sc].PITCH}:{};}
+function pval(k){if(k==='MORPH')return unitText('MORPH',M_&&M_.morph);const s=snd();return s?unitText(k,s[st.scene][k],uctx()):'-';}
 function mval(src,k){const s=snd(),v=s&&s.mod[st.scene][src][k];return v?fmt(v,true):'0';}
 function pnum(k){const s=snd();return s?s[st.scene][k]:0;}
 
@@ -229,7 +232,7 @@ function touchActive(){return st.touchOn&&st.touch&&Date.now()-st.touch.t<TOUCH_
 function vTouch(b){const {T,L,X}=fs(),top=header(b),bot=status(b,st.view,'SCENE '+st.scene);
   const {k,src}=st.touch,s=snd(),o=st.scene==='A'?'B':'A';
   const v=src?s.mod[st.scene][src][k]:s[st.scene][k],ov=src?s.mod[o][src][k]:s[o][k];
-  const bip=!!(src||BIPOLAR[k]),val=fmt(v,bip),heroH=X?fm.lh(X):fm.lh(L)*2,barH=6;
+  const bip=!!(src||BIPOLAR[k]),show=(x,sc=st.scene)=>src?fmt(x,true):unitText(k,x,uctx(sc)),val=show(v),heroH=X?fm.lh(X):fm.lh(L)*2,barH=6;
   const blockH=fm.lh(T)+3+heroH+4+barH+5+fm.lh(T);
   let y=top+Math.max(0,(bot-top-blockH)>>1);                     // centre the block
   text(b,T,src?src+' > '+k:k,2,y+fm.asc(T),12);textR(b,T,src?'DEPTH':'SCENE '+st.scene,W-2,y+fm.asc(T),6);
@@ -242,7 +245,7 @@ function vTouch(b){const {T,L,X}=fs(),top=header(b),bot=status(b,st.view,'SCENE 
     rect(b,v<0?c-len:c,y+1,len,barH-2,13);rect(b,c,y-1,1,barH+2,10);}
   else rect(b,bx+1,y+1,Math.round((bw-2)*Math.min(1,Math.max(0,v))),barH-2,13);
   y+=barH+5;
-  text(b,T,'SCENE '+o,2,y+fm.asc(T),6);textR(b,T,fmt(ov,bip),W-2,y+fm.asc(T),8);}
+  text(b,T,'SCENE '+o,2,y+fm.asc(T),6);textR(b,T,show(ov,o),W-2,y+fm.asc(T),8);}
 
 // ---------- render ----------
 const cv=document.getElementById('oled');

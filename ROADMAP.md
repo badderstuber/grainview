@@ -50,12 +50,19 @@ phone/desktop app. It does the SWD talking; the module is never modified.
 - [x] **Patch write-back** — plain RAM write to the stored scene value; engine follows, no halt (2026-10-11). Knobs JUMP on touch (no pickup). Persisted by setting the project-changed flag (state+0x11) → module autosaves; survives power-cycle ✅.
 - [x] **Mod matrix** (RAND/X/Y/Z → params, per scene) — read + write via `mg_param.py --mod` (2026-10-11).
 - [ ] Nice-to-haves: trigger record, save/load project, read slot→file assignments (Sound structs @ base+0x58c, 0x9f0 stride).
-      ⏸ PARKED 2026-10-11 (module away): `tools/mg_slots.py` written (slot→file table, `--json`),
-      import-checked but **not yet run on hardware**. +0x4f4 "missing" byte shown raw — verify it.
-- [ ] Real **unit conversions**: RATE→Hz, SIZE→ms/s, PITCH→semitones, TONE→%, SHAPE→name.
-      ⏸ PARKED 2026-10-11. Offline-RE only (no module needed): DSP reads the live block via
-      base 0x20000000 + offset, so literal xrefs find nothing — needs a Ghidra pass on the
-      audio IRQ path.
+      ✅ slot→file: `tools/mg_slots.py` **hardware-verified 2026-10-12** (matched the
+      file loaded the day before). +0x4f4 "missing" byte still unverified (all 0 — needs a
+      missing file to test).
+- [x] **Unit conversions** (2026-10-12) — `tools/gv_units.js`, from the grain engine
+      `FUN_08016278` (fs = **48076 Hz**): RATE = v²·130.813 Hz (min 0.25); SIZE = 960 +
+      v²·191040 samples (20 ms–4 s); PITCH = v·48−24 st; SHAPE idx thresholds 0.03/0.97
+      (names from manual); TONE ± = HP/LP (≈312 Hz…7 kHz, approx); rest linear %. Mode
+      flags **hardware-confirmed**: RATE-SIZE link u8 sound+0x53d, SIZE-PITCH link u8
+      sound+0x525, clock period f32 0x24020834 (s, smoothed). Applied: linked RATE =
+      (1+7v)/grain length; SP link divides grain length by pitch ratio; sync → x1/16..x16.
+      Sync enable u8 0x24025bc1 **hardware-confirmed** (it's a setting that must be
+      enabled; patching a clock alone leaves it 0).
+      Open: SIZE modes 2/3 (8 s / buffer) not handled; TONE Hz approximate.
 
 ### Phase 2 — The app = live GRAINVIEW emulator (decided 2026-10-12)
 The big responsive dashboard (`demo_app.html`) is an **old concept — dropped**.
@@ -68,8 +75,13 @@ designed once here, then ported to LVGL on the Pico (Phase 3).
       Live SWD backend reuses mg_param/mg_load helpers — **written, NOT yet run on hardware**.
 - [x] Emulator wired to the API: header (file, ▸ playing), WAVE markers + MORPH, PARM, MOD
       grid, SET ("Sel plays" toggle), FILE list → load. Values normalized for now.
-- [ ] Hardware test of the live backend (poll rate: 8 sounds' block reads @ 5 Hz — check
-      it keeps up and nothing glitches).
+- [x] **Live backend hardware-tested 2026-10-12** ✅ — full state read 120 ms (5 Hz poll);
+      module→app sound/scene/knob/MORPH follow; app SOUND‹› + SCENE (panel A/B + knob LEDs
+      follow) + FILE→load all work; hero view fires on knobs, no idle jitter seen.
+      Fixed on hardware: (1) UI flicker after app writes — server now patches its cached
+      snapshot under the poll lock; (2) `ProbeError: Write verification error` (~10% of
+      scene writes) — ST-Link read-back races the firmware on flag bytes it also writes;
+      `mg_load.write8()` tolerates that for volatile flags, verifies + retries real values.
 - [x] **Decided 2026-10-12: no per-param editing in GRAINVIEW.** Knobs on the module
       are faster + playable, and GRAINVIEW shows the value while you turn. App-set
       values would also be lost on knob touch (JUMP takeover). PARM + MOD are views.
@@ -80,8 +92,7 @@ designed once here, then ported to LVGL on the Pico (Phase 3).
 - [x] **Decided 2026-10-12: A/B is synced with the module both ways** (= the panel's
       edited scene, u8 `0x24025b48`; NOT MORPH). Setter found offline: `FUN_080114e4`
       (store + notify + state+0x30 = 0). `POST /scene` does the stores without the
-      notify (like select). Mock-tested; **hardware check:** panel A/B LEDs + knob LEDs
-      follow? If not, read the notify invoker ptr @ `0x24025b44`.
+      notify (like select). **Hardware-verified 2026-10-12:** panel A/B + knob LEDs follow.
 - [x] Font comparison page `tools/font_compare.html` (2026-10-12): 31 u8g2 BDF candidates
       in 3 tiers (tiny labels / medium must-read / large values), pixel-exact 4-bit
       framebuffer, zoom + calibrated actual size, Metropolix-style sample screens.
