@@ -82,6 +82,32 @@ designed once here, then ported to LVGL on the Pico (Phase 3).
       (store + notify + state+0x30 = 0). `POST /scene` does the stores without the
       notify (like select). Mock-tested; **hardware check:** panel A/B LEDs + knob LEDs
       follow? If not, read the notify invoker ptr @ `0x24025b44`.
+- [x] Font comparison page `tools/font_compare.html` (2026-10-12): 31 u8g2 BDF candidates
+      in 3 tiers (tiny labels / medium must-read / large values), pixel-exact 4-bit
+      framebuffer, zoom + calibrated actual size, Metropolix-style sample screens.
+      Also served at `/font_compare.html` (shares calibration). Fonts: `tools/fonts/`.
+- [ ] ⏸ PARKED 2026-10-12 (Leo deciding, ideally on the real OLED): pick fonts.
+      **Fonts will be a SET setting** — 3–4 curated *font sets* (tiny/medium/large
+      combos, each verified to fit every screen), not free per-tier picks. Layouts
+      must derive positions from font metrics (cap/line height, text width), as
+      font_compare.html does. Cheap on the Pico (few KB flash per font).
+- [x] Emulator on the bitmap renderer (2026-10-12): shared core `tools/gv_draw.js`
+      (4-bit fb, BDF text, pixel ellipsis, crisp zoom/calibrated actual size, redraw
+      only on change). **Working font set = Spleen** (5x8 / 6x12 / 8x16); SET > Font
+      switches sets (Spleen, Classic) and every view reflows from font metrics.
+      Metropolix-style chrome: header `S# ▸ file … [A]`, tiny status line
+      `page-dots VIEW ······ hint` (tab strip dropped), two-line flash box.
+- [x] **Knob-touched hero view** (2026-10-12): turning a Multigrain knob shows that
+      param big (Spleen 16x32 hero tier) for 1.5 s + position bar (bipolar from
+      centre) + the other scene's value; status line keeps the view you return to.
+      Trigger = stored scene value of selected sound/edited scene moving (knobs write
+      these; CV doesn't), or a mod depth. MORPH excluded (often CV). Sound/scene
+      switch and bulk changes (≥3 values: preset load) are silent. Suppressed in
+      FILE / SET-edit. SET › Knob view ON/OFF. Mock-tested. **Hardware check:** do
+      knobs ever jitter the stored value (ADC noise) → false heroes? (TOUCH_EPS 0.004)
+- [ ] Hardware to buy (list agreed 2026-10-12): Pico 2 WH, SSD1327 (SPI), 2× half breadboards,
+      jumpers, EC11 push encoder module, 6 tactile buttons. First use: Pico as a
+      **dumb USB screen** mirroring the emulator framebuffer (no UI port needed).
 - [ ] Real waveform for WAVE (needs sample data location in RAM, or read the WAV off SD).
 
 ### Phase 3 — Dedicated "Screen" eurorack module (clutter-free endgame) ⭐
@@ -115,7 +141,10 @@ web app over WiFi as an optional big-screen view.)
   A/B — plus **2 A/B scene LEDs** (same colour; lit=active scene) beside the A/B btn.
 - **Panel layout** (top→bottom): screen · [BACK | encoder] · [VIEW | FILE] ·
   [SOUND‹ | SOUND›] · [A/B btn | A/B LEDs].
-- **4 views** (VIEW button cycles + encoder pages, tab strip top): WAVE · PARM · MOD · SET.
+- **4 views** (VIEW button cycles + encoder pages): WAVE · PARM · MOD · SET.
+  Where-am-I = **status line at the bottom** (page dots + view name, Metropolix
+  style) — the top tab strip was dropped 2026-10-12 to give content the space
+  (Leo: keep for now; fallback idea = tabs shown briefly on VIEW/turn).
 - **Interaction model:** encoder turn = page views / navigate; push = dive-in /
   select; BACK = up a level; SOUND‹› & SCENE A/B are global (apply across views);
   FILE opens the SD browser overlay. No long-press / chords (keep it obvious).

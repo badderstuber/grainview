@@ -1,0 +1,117 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>GRAINVIEW — font comparison</title>
+<style>
+  body{background:#0e1012;color:#c9d2d8;font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;margin:0;padding:24px}
+  h1{font-size:16px;margin:0 0 2px}h2{font-size:14px;margin:22px 0 8px;color:#e8edf0}
+  .sub{color:#7d8893;font-size:12px;margin-bottom:14px}
+  .bar{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-bottom:16px;font-size:12px;color:#9aa6ad}
+  select,button{background:#22282c;color:#c7d0d6;border:1px solid #454e54;border-radius:6px;padding:5px 8px;font:12px ui-monospace,Menlo,monospace}
+  button{cursor:pointer}
+  #ruler{height:6px;background:#c9d2d8;border-radius:1px}
+  .screens{display:flex;gap:28px;flex-wrap:wrap;align-items:flex-end}
+  .screens figure{margin:0;text-align:center}.screens figcaption{font-size:11px;color:#7d8893;margin-top:6px}
+  canvas{display:block;background:#000;border-radius:4px;box-shadow:0 0 0 3px #000}
+  .tier{display:grid;grid-template-columns:repeat(auto-fill,minmax(var(--cw),1fr));gap:14px}
+  .spec{background:#15181b;border:1px solid #262c31;border-radius:8px;padding:8px;cursor:pointer}
+  .spec.sel{border-color:#9fd3ff;box-shadow:0 0 0 1px #9fd3ff}
+  .spec .nm{font:11px ui-monospace,Menlo,monospace;color:#9aa6ad;margin-bottom:6px;display:flex;justify-content:space-between}
+  .note{color:#6b767d;font-size:12px;max-width:760px}
+</style>
+</head>
+<body>
+<h1>GRAINVIEW — font comparison</h1>
+<div class="sub">128×128 SSD1327 · fonts drawn pixel-exact into a 4-bit framebuffer (as the Pico will) · u8g2 BDF fonts</div>
+<div class="bar">
+  <button id="sizebtn" onclick="toggleSize()">ZOOM 3×</button>
+  <span id="calib" style="display:none;align-items:center;gap:6px">
+    <span id="ruler"></span>= 50 mm?
+    <button onclick="calib(-1)">−</button><button onclick="calib(1)">+</button></span>
+  <span>tiny <select id="selT"></select></span>
+  <span>medium <select id="selM"></select></span>
+  <span>large <select id="selL"></select></span>
+  <span>hero <select id="selX"></select></span>
+</div>
+
+<div class="screens" id="screens"></div>
+<p class="note">Click a specimen below to use it in the screens above. Same calibration as the emulator
+  (ACTUAL = 26.7 mm active area). At actual size each OLED pixel is drawn as a lit square, so sharpness
+  is close to the real panel; at 3× you see the pixel structure.</p>
+
+<h2>Tiny — labels, status line (cap 4–6 px)</h2><div class="tier" id="tierT"></div>
+<h2>Medium — must-read: file names, lists (cap 7–8 px)</h2><div class="tier" id="tierM"></div>
+<h2>Large — values at a glance (cap 9–13 px)</h2><div class="tier" id="tierL"></div>
+<h2>Hero — one value, across the room (cap 14+ px)</h2><div class="tier" id="tierX"></div>
+
+<script src="fonts/gv_fonts.js"></script>
+<script src="gv_draw.js"></script>
+<script>
+// ---------- tiers (by measured cap height) ----------
+const F=GV_FONTS, names=Object.keys(F);
+const TIERS={T:names.filter(n=>F[n].cap<=6), M:names.filter(n=>F[n].cap>=7&&F[n].cap<=8), L:names.filter(n=>F[n].cap>=9&&F[n].cap<=13), X:names.filter(n=>F[n].cap>=14)};
+const DEF=FONT_SETS.Spleen;                 // working set (2026-10-12)
+const sel={}; for(const t in TIERS) sel[t]=localStorage['gvFont'+t]&&F[localStorage['gvFont'+t]]?localStorage['gvFont'+t]:DEF[t];
+
+const cap=fm.cap;                      // drawing core: gv_draw.js
+
+// ---------- sample screens (Metropolix-style hierarchy) ----------
+function scrParm(T,M,L){const b=fb();
+  const rows=[['SIZE','240ms','RATE','12.5Hz'],['PITCH','+7st','SHAPE','TUKEY'],['START','.32','WRAP','.65']];
+  let y=2;
+  rows.forEach(([l1,v1,l2,v2])=>{
+    text(b,T,l1,2,y+cap(T),8);text(b,T,l2,66,y+cap(T),8);
+    const vy=y+cap(T)+3+cap(L);text(b,L,v1,2,vy,15);text(b,L,v2,66,vy,15);
+    y=vy+F[L].descent+5;});
+  const sy=H-3;text(b,T,'S2',2,sy,10);const r='SCENE B';
+  dots(b,4+textW(T,'S2'),W-6-textW(T,r),sy-1,5);textR(b,T,r,W-2,sy,10);
+  return b;}
+function scrFile(T,M,L){const b=fb();
+  const files=['bass_sub.wav','choir_ah.wav','field_rec.wav','glass_hit.wav','leo-bangla-stabs.wav','noise_fl.wav','Rec00012.wav','strings.wav','vinyl.wav'];
+  text(b,T,'FILE',2,2+cap(T),10);textR(b,T,'/WAVS  12',W-2,2+cap(T),6);
+  const lh=F[M].ascent+F[M].descent+1;let y=cap(T)+6;
+  for(let i=0;y+lh<=H-cap(T)-5&&i<files.length;i++,y+=lh){
+    if(i===4){rect(b,0,y,W,lh,15);text(b,M,files[i],3,y+F[M].ascent,0);}
+    else text(b,M,files[i],3,y+F[M].ascent,12);}
+  const sy=H-3;text(b,T,'PUSH',2,sy,8);const r='LOAD > S2';
+  dots(b,4+textW(T,'PUSH'),W-6-textW(T,r),sy-1,5);textR(b,T,r,W-2,sy,8);
+  return b;}
+function scrTouch(T,M,L){const b=fb();                               // "last knob touched" hero
+  text(b,T,'S2  VOX.WAV',2,2+cap(T),8);textR(b,T,'A',W-2,2+cap(T),15);
+  text(b,T,'SIZE',2,34,8);
+  text(b,sel.X,'240ms',2,40+fm.asc(sel.X),15);                      // hero value
+  frame(b,2,98,W-4,8,6);rect(b,4,100,Math.round((W-8)*0.42),4,13);
+  const sy=H-3;text(b,T,'MORPH',2,sy,8);textR(b,T,'0.35',W-2,sy,8);
+  return b;}
+function scrSpec(f,tier){const b=fb(W,tier==='X'?70:tier==='L'?40:tier==='M'?30:22);
+  const S={T:['LOOP PULSES  S2 SCENE B','0123456789 +-.% FILE'],
+           M:['leo-bangla-stabs.wav','Rec00012.wav  -12st'],
+           L:['240ms +7st','Auto .65'],X:['+.42','240ms']}[tier];
+  const lh=F[f].ascent+F[f].descent+1;
+  S.forEach((s,i)=>text(b,f,s,1,1+F[f].ascent+i*lh,15));
+  return b;}
+
+function render(){
+  const T=sel.T,M=sel.M,L=sel.L,host=document.getElementById('screens');host.innerHTML='';
+  for(const [nm,fn] of [['PARM (labels + values)',scrParm],['FILE (list)',scrFile],['knob touched (hero)',scrTouch]]){
+    const fig=document.createElement('figure'),cv=document.createElement('canvas');
+    fig.append(cv);fig.insertAdjacentHTML('beforeend',`<figcaption>${nm}</figcaption>`);host.append(fig);show(cv,fn(T,M,L));}
+  for(const t in TIERS){const host=document.getElementById('tier'+t);host.innerHTML='';
+    host.style.setProperty('--cw',(W*(sz.actual?OLED_MM*sz.pxPerMm/W:ZOOM)+18)+'px');
+    for(const f of TIERS[t]){const d=document.createElement('div');d.className='spec'+(sel[t]===f?' sel':'');
+      d.innerHTML=`<div class="nm"><span>${f}</span><span>cap ${F[f].cap}px</span></div>`;
+      const cv=document.createElement('canvas');d.append(cv);show(cv,scrSpec(f,t));
+      d.title=F[f].copyright||'';d.onclick=()=>pick(t,f);host.append(d);}
+    const s=document.getElementById('sel'+t);s.innerHTML=TIERS[t].map(f=>`<option ${f===sel[t]?'selected':''}>${f}</option>`).join('');
+    s.onchange=()=>pick(t,s.value);}
+  document.getElementById('sizebtn').textContent=sz.actual?'ACTUAL SIZE':'ZOOM '+ZOOM+'×';
+  document.getElementById('calib').style.display=sz.actual?'flex':'none';
+  document.getElementById('ruler').style.width=RULER_MM*sz.pxPerMm+'px';}
+function pick(t,f){sel[t]=f;localStorage['gvFont'+t]=f;render();}
+function toggleSize(){sz.actual=!sz.actual;sizeSave();render();}
+function calib(d){sz.pxPerMm*=1+d*0.01;sizeSave();render();}
+render();
+</script>
+</body>
+</html>

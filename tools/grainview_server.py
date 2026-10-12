@@ -319,6 +319,13 @@ class SwdBackend:
 
 # ---- HTTP -------------------------------------------------------------------
 
+STATIC = {
+    "/font_compare.html": ("font_compare.html", "text/html; charset=utf-8"),
+    "/fonts/gv_fonts.js": ("fonts/gv_fonts.js", "text/javascript; charset=utf-8"),
+    "/gv_draw.js": ("gv_draw.js", "text/javascript; charset=utf-8"),
+}
+
+
 def make_handler(be):
     page_path = os.path.join(HERE, "grainview_emulator.html")
 
@@ -349,6 +356,9 @@ def make_handler(be):
             if path in ("/", "/index.html"):
                 with open(page_path, "rb") as f:
                     self._send(200, f.read(), "text/html; charset=utf-8")
+            elif path in STATIC:                 # same origin = shared calibration
+                with open(os.path.join(HERE, STATIC[path][0]), "rb") as f:
+                    self._send(200, f.read(), STATIC[path][1])
             elif path == "/state":
                 self._send(200, be.snapshot())
             elif path == "/files":
