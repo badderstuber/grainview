@@ -52,8 +52,10 @@ phone/desktop app. It does the SWD talking; the module is never modified.
 - [x] **Load a WAV from any folder** (project / Wavs / Recs) — `mg_load.py --folder wavs|recs|project N`
       via the panel's folder-button routine `FUN_0803e91c(ui, F)` (sets the sound's folder
       +0x59c with notify, then loads at cursor[F]). **Hardware-tested 2026-10-12** (Sound 5:
-      project → Wavs → project). Empty-sound path (firmware resets the sound + cursors, we
-      do a 2nd load) and Recs (card had none) untested. Recs names = `Rec%05d.wav` of the
+      project → Wavs → project). **Empty-sound path hardware-tested 2026-10-12** (created a
+      throwaway Project05 over SWD, loaded /Wavs[3] into empty Sound 1: firmware reset +
+      loaded file 0, our 2nd load landed on index 3 ✅). Recs (card had none) still untested.
+      Recs names = `Rec%05d.wav` of the
       int list. Firmware bug: a Rec load copies the name to 0x30000000+cursor*0x100, so Rec
       index ≥ 8 overwrites project-list names in RAM (panel does the same) - re-read lists.
 - [x] **Presets + projects** — `tools/mg_preset.py` (status / N / `--save` / `--lock` /
@@ -131,8 +133,10 @@ designed once here, then ported to LVGL on the Pico (Phase 3).
       Trigger = stored scene value of selected sound/edited scene moving (knobs write
       these; CV doesn't), or a mod depth. MORPH excluded (often CV). Sound/scene
       switch and bulk changes (≥3 values: preset load) are silent. Suppressed in
-      FILE / SET-edit. SET › Knob view ON/OFF. Mock-tested. **Hardware check:** do
-      knobs ever jitter the stored value (ADC noise) → false heroes? (TOUCH_EPS 0.004)
+      FILE / SET-edit. SET › Knob view ON/OFF. **Hardware-tested 2026-10-12: no jitter** —
+      320 polls over 60 s on the selected sound, stored scene values bit-identical (p2p
+      0.00000 across all params + mod depths), zero false heroes. Firmware only writes the
+      stored values on real knob motion, so TOUCH_EPS (0.004) has huge margin.
 - [ ] Hardware to buy (list agreed 2026-10-12): Pico 2 WH, SSD1327 (SPI), 2× half breadboards,
       jumpers, EC11 push encoder module, 6 tactile buttons. First use: Pico as a
       **dumb USB screen** mirroring the emulator framebuffer (no UI port needed).

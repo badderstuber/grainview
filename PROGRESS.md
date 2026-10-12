@@ -9,6 +9,24 @@ _Last updated: 2026-10-12._
 
 ---
 
+## Update 2026-10-12 (night) — two open hardware checks closed ✅
+
+- **Empty-sound WAV load — HARDWARE-TESTED ✅.** All 17 projects were full, so created a
+  throwaway **Project05 over SWD** with `FUN_08012c54(4, 0)` — the panel's exact pad call.
+  It DOES create a missing project (the mkdir is inside the open-or-create wrapper
+  `FUN_0805253c`/FatFS, reached via `FUN_08024598`; a mid-session doubt that it "doesn't
+  create" was WRONG — confirmed the note). Loaded `/Wavs[3]` into empty Sound 1: firmware
+  reset the sound + loaded file 0, then `mg_load.fix_cursor` injected a 2nd load → landed
+  on index 3 (`intellijel-10-Cascadia-percussion-loop.wav`), not file 0. Note:
+  `mg_preset.py` guards against switching to a non-existent project; for a throwaway,
+  bypass it with a direct `FUN_08012c54(n, 0)` inject on a free slot.
+- **Knob-hero ADC jitter — HARDWARE-TESTED ✅, no jitter.** 320 polls over 60 s on the
+  selected sound's edited scene: all 10 params + 40 mod depths bit-identical (peak-to-peak
+  0.00000), zero false heroes. Firmware only writes stored scene values on real knob
+  motion, so TOUCH_EPS (0.004) has huge margin.
+- SD/projects confirmed fully disposable (Leo: backed up, do anything). Module left on
+  Project02 (session start); throwaway Project05 remains on the card.
+
 ## Update 2026-10-12 (evening) — any-folder WAV load, presets + projects
 
 - **WAV from any folder:** `mg_load.py --folder project|wavs|recs [N]`; GRAINVIEW FILE
