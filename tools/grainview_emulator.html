@@ -26,6 +26,12 @@
   .legend h2{font-size:14px;margin:16px 0 6px}.legend li{margin:3px 0;color:#9aa6ad}
   kbd{background:#222a30;border:1px solid #3a444b;border-radius:4px;padding:1px 6px;font:11px ui-monospace,monospace;color:#cdd6dc}
   .k{color:#e8edf0;font-weight:600}
+  body.embed{padding:0;background:transparent}
+  .embed .device{padding:0;border:0;background:none}
+  .embed h1,.embed .sub,.embed .sizebar,.embed .controls,.embed .legend{display:none}
+  #mk{display:grid;grid-template-columns:max-content 1fr;gap:2px 10px;align-items:center;
+      font:11px ui-monospace,Menlo,monospace;color:#9aa6ad}
+  #mk input{width:100%;margin:0}
 </style>
 </head>
 <body>
@@ -78,6 +84,11 @@
       <li>PRESETS / PROJECTS: push a slot for LOAD / SAVE / LOCK (or OPEN / SAVE NOW). Overwriting a preset needs a 2nd push; locked ones can't be saved over.</li>
       <li>Turn a knob on the Multigrain → its value shows big for 1.5 s (SET › Knob view).</li>
     </ul>
+    <div id="mockknobs" hidden>
+      <h2>Mock knobs</h2>
+      <div class="sub">--mock only · stands in for the module's knobs (selected sound, edited scene)</div>
+      <div id="mk"></div>
+    </div>
     <div style="color:#6b767d;font-size:12px;margin-top:10px">This is the firmware spec. Served by
       <code>grainview_server.py</code> (<code>--mock</code> = no module). Param values in real units from the firmware (<code>gv_units.js</code>); the waveform is synthetic.</div>
   </div>
@@ -91,10 +102,21 @@ const PKEYS=['START','WRAP','SCAN','SHAPE','SIZE','RATE','PITCH','TONE','LEVEL',
 const MKEYS=PKEYS.slice(0,10);                  // mod matrix has no MORPH row
 const SOURCES=['RAND','X','Y','Z'];
 const BIPOLAR={SCAN:1,TONE:1};
+const VISUAL_KEYS={START:1,WRAP:1,SCAN:1,SIZE:1,RATE:1,PITCH:1,SHAPE:1,LEVEL:1}; // drive the WAVE picture
+// WAVE styles - trial variants, compared side by side in wave_compare.html
+// (?wave=X, or SET > Wave style). No values on WAVE: knobs change the picture.
+//  A pure      a visual knob just changes the picture; TONE/BLUR/mod depths -> hero
+//  B readout   any knob on WAVE: picture + 'SIZE 507ms' in the status line, no hero
+//  C B + MORPH plus a hairline MORPH meter under the wave box
+//  D B, static grain dots don't travel (compare against B)
+const WAVE_STYLES={A:{readout:false,morph:false,travel:true},B:{readout:true,morph:false,travel:true},
+  C:{readout:true,morph:true,travel:true},D:{readout:true,morph:false,travel:false}};
+const URLQ=new URLSearchParams(location.search),EMBED=URLQ.has('embed');
 let M_=null;                                     // last /state snapshot
 const SETTINGS=[                                // [label, value fn, toggle fn | null]
   ['Sel plays',()=>st.selPlays?'ON':'OFF',()=>{st.selPlays=!st.selPlays;}],
   ['Knob view',()=>st.touchOn?'ON':'OFF',()=>{st.touchOn=!st.touchOn;localStorage.gvTouch=st.touchOn?'1':'0';}],
+  ['Wave style',()=>st.waveStyle,()=>{const k=Object.keys(WAVE_STYLES);st.waveStyle=k[(k.indexOf(st.waveStyle)+1)%k.length];localStorage.gvWave=st.waveStyle;}],
   ['Font',()=>st.fontSet,()=>{const k=Object.keys(FONT_SETS);st.fontSet=k[(k.indexOf(st.fontSet)+1)%k.length];localStorage.gvFontSet=st.fontSet;}],
   ['Link',()=>M_?(M_.mode+(M_.connected?'':' x')):'-',null],
   ['Firmware',()=>'1.4.8.0',null]];
@@ -120,6 +142,7 @@ async function poll(){
     if(M_.connected&&st.busy===0&&t0>st.localT){st.sound=M_.selected;st.scene=M_.edit_scene||st.scene;}
     if(M_.connected)detectTouch();}
   catch(e){M_=null;}
+  mockKnobs();
   document.getElementById('link').textContent=!M_?'server not running':
     M_.connected?(M_.mode==='mock'?'MOCK module':'LIVE module'):('no link: '+M_.error);
   render();setTimeout(poll,150);}
@@ -128,7 +151,9 @@ async function poll(){
 const st={view:'WAVE', overlay:null, dived:false, sound:0, scene:'A', selPlays:false,
   files:[], folder:'', rootCounts:{}, filesOk:false, filesReq:0, fileCur:0, menu:null, setCur:0, flash:null, flashT:0, busy:0, localT:0,
   fontSet:FONT_SETS[localStorage.gvFontSet]?localStorage.gvFontSet:'Spleen',
-  touchOn:localStorage.gvTouch!=='0', touch:null};
+  touchOn:localStorage.gvTouch!=='0', touch:null,
+  waveStyle:[URLQ.get('wave'),localStorage.gvWave].find(k=>WAVE_STYLES[k])||'B'};
+function ws(){return WAVE_STYLES[st.waveStyle];}
 const VIEWS=['WAVE','PARM','MOD','SET'];
 
 // ---------- drawing (gv_draw.js framebuffer; all positions from font metrics) ----------
@@ -139,13 +164,74 @@ function makeWave(n,seed){const a=new Array(n),f1=5+seed*1.7,f2=37+seed*3;
     body=0.55+0.45*Math.sin(2*Math.PI*f1*t+seed),det=0.5+0.5*Math.sin(2*Math.PI*f2*t),
     burst=(t>0.33&&t<0.42)?1:0;a[i]=Math.min(1,env*(0.75*body+0.25*det)+burst*0.4*env);}return a;}
 function seedOf(str){let h=0;for(const ch of str||'')h=(h*31+ch.charCodeAt(0))>>>0;return 1+h%9;}
-// window = START..START+WRAP (placeholder reading of WRAP), dotted line = SCAN
-function wave(b,x,y,w,h,seed,s,e,sc){const d=makeWave(w,seed),mid=y+(h>>1);
-  for(let i=0;i<w;i++){const amp=Math.round(d[i]*((h>>1)-1)),win=i/w>=s&&i/w<=e;
+// window = START..START+WRAP, dotted line = the scan playhead (where grains launch).
+// The wave is a thin band (WAVE_AMP of the height) so grain dots have room around it.
+// hot = the knob being turned: its marker goes 2 px wide (SCAN: solid instead of dotted)
+const WAVE_AMP=0.35;
+function waveBand(h){return Math.round(((h>>1)-1)*WAVE_AMP);}     // max half-height of the band
+function wave(b,x,y,w,h,seed,s,e,sc,hot){const d=makeWave(w,seed),mid=y+(h>>1),band=waveBand(h);
+  for(let i=0;i<w;i++){const amp=Math.round(d[i]*band),win=i/w>=s&&i/w<=e;
     rect(b,x+i,mid-amp,1,amp*2+1,win?9:3);px(b,x+i,mid-amp,win?15:7);px(b,x+i,mid+amp,win?15:7);}
-  rect(b,x+Math.round(s*(w-1)),y,1,h,15);rect(b,x+Math.round(e*(w-1)),y,1,h,15);
-  for(let yy=y;yy<y+h;yy+=2)px(b,x+Math.round(sc*(w-1)),yy,12);}
+  const mark=(v,wide)=>{const mx=Math.round(v*(w-1));rect(b,x+(wide&&mx===w-1?mx-1:mx),y,wide?2:1,h,15);};
+  mark(s,hot==='START');mark(e,hot==='WRAP');
+  const sx=x+Math.round(sc*(w-1));
+  if(hot==='SCAN')rect(b,sx,y,1,h,15);else for(let yy=y;yy<y+h;yy+=2)px(b,sx,yy,12);}
 function playMark(b,x,y,h){for(let i=0;i<3;i++)rect(b,x+i,y+i,1,h-2*i,15);}   // small ▸
+
+// ---------- grain dots (Evil Pet / GR-1 style): one dot per live grain ----------
+// Simulated from the knobs, not the engine's real grain voices (SWD polls far too
+// slowly to animate those). Per the manual's "anatomy of a grain":
+//  RATE  = grains launched per second (RATE-SIZE link / SYNC aware) - the density
+//  SIZE  = grain length = how long a dot lives (floor GRAIN_MIN_MS so short grains
+//          still show) and, travelling, how far it moves through the sample
+//  PITCH = read speed: a travelling dot covers length x pitch ratio of the sample
+//  SHAPE = brightness over the grain's life; LEVEL scales it
+//  START/WRAP/SCAN = launch point: the scan playhead (grains launch from START;
+//          SCAN advances each successive grain's start by a set distance through
+//          START..START+WRAP, CW fwd / CCW back, centred = static; resets to START
+//          on SOUND press / gate)
+// y = random, above/below the band. Dot count = grains overlapping right now.
+// PLACEHOLDERS: SCAN_STEP (window fraction per grain at full SCAN) until the
+// firmware's step is mapped; sample length (sampleSec) until the WAV header is
+// read (preview spike); no REVERSE yet. GRAIN_SPREAD is visual only.
+// Only the playing sound makes grains; values = edited scene (matches the markers).
+const GRAIN_MIN_MS=80,GRAIN_MAX=160,GRAIN_PX=2,GRAIN_SPREAD=0.02,SCAN_STEP=0.05;
+const gr={list:[],acc:0,t:0,key:null,ph:0};                      // ph = playhead, 0..1 of the window
+function win(){const s0=pnum('START');return [s0,Math.min(1,s0+pnum('WRAP'))];}
+function scanPos(){const [s0,e]=win();return s0+gr.ph*(e-s0);}   // playhead, 0..1 of the sample
+function sampleSec(s){return s.length_s||1+seedOf(s.file);}      // fake 2..10 s until we read the header
+function grainRateHz(s,P,gms){
+  if(M_.sync===1&&M_.clock_period)return SYNC_MULT[units.syncIdx(P.RATE)]/M_.clock_period;
+  return s.link_rs===1?units.rateLinkedHz(P.RATE,gms):units.rateHz(P.RATE);}
+// SHAPE windows over a grain's life t 0..1 (approximate forms of the 7 shapes)
+function shapeEnv(i,t){switch(SHAPES[i]){
+  case 'BELL':return Math.exp(-0.5*((t-0.5)/0.17)**2);
+  case 'SINC':{const x=(t-0.5)*4*Math.PI;return x?Math.abs(Math.sin(x)/x):1;}
+  case 'TRI':return 1-Math.abs(2*t-1);
+  case 'DECAY':return (1-t)**2;
+  case 'RAMP':return t;
+  case 'TUKEY':return t<0.2?0.5-0.5*Math.cos(Math.PI*t/0.2):t>0.8?0.5-0.5*Math.cos(Math.PI*(1-t)/0.2):1;
+  default:return 1;}}                                              // SQUARE
+function grainsStep(now){const s=snd(),dt=Math.min(0.1,(now-(gr.t||now))/1000);gr.t=now;
+  const key=st.sound+'/'+(s&&s.file);if(key!==gr.key){gr.key=key;gr.list=[];gr.acc=0;gr.ph=0;}
+  gr.list=gr.list.filter(g=>now-g.t0<g.life);
+  if(!(s&&s.file&&M_&&M_.connected&&M_.playing===st.sound)){gr.acc=0;return;}
+  const P=s[st.scene],gms=units.grainMs(P.SIZE,P.PITCH,s.link_sp===1),life=Math.max(GRAIN_MIN_MS,gms),
+        dist=gms/1000*Math.pow(2,units.pitchSt(P.PITCH)/12)/sampleSec(s);   // sample read per grain
+  gr.acc=Math.min(gr.acc+dt*grainRateHz(s,P,gms),GRAIN_MAX);
+  for(;gr.acc>=1;gr.acc--){
+    gr.list.push({x:scanPos()+(Math.random()-0.5)*GRAIN_SPREAD,y:Math.random(),t0:now,life,gms,dist});
+    gr.ph=((gr.ph+P.SCAN*SCAN_STEP)%1+1)%1;}                       // next grain starts further on
+  if(gr.list.length>GRAIN_MAX)gr.list.splice(0,gr.list.length-GRAIN_MAX);}  // oldest go first
+// dots above / below the wave band (g.y < .5 = above); if one still lands on the
+// bright wave it is cut out (black) instead. travel: x moves through the read span.
+function grains(b,x,y,w,h,now,travel){const sh=units.shapeIdx(pnum('SHAPE')),lv=Math.sqrt(clamp(pnum('LEVEL'),0,1)),
+    mid=y+(h>>1),gap=waveBand(h)+2,zone=Math.max(0,(h>>1)-gap-GRAIN_PX);
+  for(const g of gr.list){const age=now-g.t0,v=Math.round(15*lv*shapeEnv(sh,age/g.life));if(v<1)continue;
+    const gxf=g.x+(travel?g.dist*Math.min(1,age/g.gms):0),
+          gx=x+Math.round(clamp(gxf,0,1)*(w-GRAIN_PX)),
+          gy=g.y<0.5?mid-gap-GRAIN_PX-Math.round(g.y*2*zone):mid+gap+Math.round((g.y-0.5)*2*zone);
+    for(let j=0;j<GRAIN_PX;j++)for(let i=0;i<GRAIN_PX;i++){const u=b.p[(gy+j)*b.w+gx+i];px(b,gx+i,gy+j,u>=8?0:v);}}}
 
 // header: S# [▸] filename .......... [A]   -> returns content top y
 function header(b){const {M}=fs(),s=snd(),lh=fm.lh(M),base=fm.asc(M)+1;
@@ -158,24 +244,25 @@ function header(b){const {M}=fs(),s=snd(),lh=fm.lh(M),base=fm.asc(M)+1;
   hline(b,0,W-1,lh+2,4);
   return lh+4;}
 // status line (tiny): page dots + NAME ······ right-hint   -> returns its top y
-function status(b,name,right){const {T}=fs(),y=H-1-fm.desc(T),top=H-fm.lh(T)-1;let x=1;
+function status(b,name,right,rv=10){const {T}=fs(),y=H-1-fm.desc(T),top=H-fm.lh(T)-1;let x=1;
   if(VIEWS.includes(name)){for(let i=0;i<VIEWS.length;i++){const on=VIEWS[i]===st.view;
       if(on)rect(b,x,y-3,3,3,15);else px(b,x+1,y-2,6);x+=4;}x+=2;}
   x+=text(b,T,name,x,y,10)+3;
-  const rw=textW(T,right);dots(b,x+(x&1),W-rw-4,y-1,5);textR(b,T,right,W-1,y,10);
+  const rw=textW(T,right);dots(b,x+(x&1),W-rw-4,y-1,5);textR(b,T,right,W-1,y,rv);
   return top;}
 
-function vWave(b){const {T,M}=fs(),top=header(b),bot=status(b,'WAVE','PLAY S'+(M_?M_.playing+1:'-'));
-  const s=snd(),s0=pnum('START'),cell=fm.lh(T)+fm.lh(M)+2,morphH=fm.lh(T)+2;
-  const wh=bot-top-2*cell-morphH-6;                                  // waveform gets what's left
-  if(s&&s.file)wave(b,1,top,W-2,wh,seedOf(s.file),s0,Math.min(1,s0+pnum('WRAP')),(pnum('SCAN')+1)/2);
-  else text(b,M,'no sample',(W-textW(M,'no sample'))>>1,top+(wh>>1)+(fm.cap(M)>>1),5);
-  let y=top+wh+3;                                                     // MORPH = what you hear
-  text(b,T,'MORPH',1,y+fm.asc(T),8);const bx=textW(T,'MORPH ')+2,bw=W-bx-2;
-  frame(b,bx,y+1,bw,fm.cap(T),5);rect(b,bx+1,y+2,Math.round((bw-2)*(M_&&M_.morph||0)),fm.cap(T)-2,13);
-  y+=morphH+1;
-  [['START','WRAP'],['SCAN','SIZE']].forEach(row=>{row.forEach((k,i)=>{const x=1+i*64;
-      text(b,T,k,x,y+fm.asc(T),8);text(b,M,pval(k),x,y+fm.lh(T)+1+fm.asc(M),15);});y+=cell;});}
+// WAVE: no values - the header, the wave box (waveform + grains) and the status line.
+// Styles B-D show the touched knob in the status line instead of a hero (touchText).
+function vWave(b){const {M}=fs(),S=ws(),ro=S.readout&&touchRecent()?touchText():null,top=header(b);
+  const bot=status(b,'WAVE',ro||'PLAY S'+(M_?M_.playing+1:'-'),ro?15:10);
+  const s=snd(),mh=S.morph?3:0,h=bot-top-2-mh,now=performance.now();
+  grainsStep(now);
+  if(s&&s.file){const [s0,e]=win();wave(b,1,top,W-2,h,seedOf(s.file),s0,e,scanPos(),waveHot());
+    grains(b,1,top,W-2,h,now,S.travel);}
+  else text(b,M,'no sample',(W-textW(M,'no sample'))>>1,top+(h>>1)+(fm.cap(M)>>1),5);
+  if(S.morph){const my=bot-mh;rect(b,1,my,W-2,2,3);rect(b,1,my,Math.round((W-2)*(M_&&M_.morph||0)),2,13);}}
+function touchText(){const {k,src}=st.touch,s=snd();
+  return src?src+'>'+k+' '+fmt(s.mod[st.scene][src][k],true):k+' '+pval(k);}
 function vParm(b){const {T,M}=fs(),top=header(b),bot=status(b,'PARM','SCENE '+st.scene);
   const cols=3,cw=Math.floor(W/cols),rows=Math.ceil(PKEYS.length/cols),
         ch=Math.min(fm.lh(T)+fm.lh(M)+3,Math.floor((bot-top)/rows));
@@ -261,8 +348,13 @@ function detectTouch(){const s=snd();
   if(hits.length>=BULK){st.touch=null;return;}      // preset load etc. (also cancels a split one)
   if(!hits.length||!st.touchOn)return;
   const h=hits.sort((a,b)=>b.d-a.d)[0];st.touch={k:h.k,src:h.src||null,t:Date.now()};}
-function touchActive(){return st.touchOn&&st.touch&&Date.now()-st.touch.t<TOUCH_MS&&snd()
-  &&st.overlay!=='FILE'&&!(st.view==='SET'&&st.dived);}
+function touchRecent(){return st.touchOn&&st.touch&&Date.now()-st.touch.t<TOUCH_MS&&snd();}
+// the knob being turned (not a mod depth) -> START/WRAP/SCAN markers go bold on WAVE
+function waveHot(){return touchRecent()&&!st.touch.src?st.touch.k:null;}
+function touchActive(){if(!touchRecent()||st.overlay==='FILE'||(st.view==='SET'&&st.dived))return false;
+  if(st.view==='WAVE'){if(ws().readout)return false;                 // B-D: status line readout instead
+    if(!st.touch.src&&VISUAL_KEYS[st.touch.k])return false;}         // A: the picture is the feedback
+  return true;}
 function vTouch(b){const {T,L,X}=fs(),top=header(b),bot=status(b,st.view,'SCENE '+st.scene);
   const {k,src}=st.touch,s=snd(),o=st.scene==='A'?'B':'A';
   const v=src?s.mod[st.scene][src][k]:s[st.scene][k],ov=src?s.mod[o][src][k]:s[o][k];
@@ -333,7 +425,7 @@ function btn(n){
 }
 // SOUND‹› = edit focus on the module; "Sel plays" also switches playback
 async function selectSound(n){
-  st.sound=n;st.busy++;st.localT=Date.now();
+  st.sound=n;gr.ph=0;                                             // SOUND press resets the scan to STARTst.busy++;st.localT=Date.now();
   try{await api('/select',{sound:n});if(st.selPlays)await api('/play',{});}
   catch(e){flash(e.message);}
   finally{st.busy--;st.localT=Date.now();}}
@@ -390,7 +482,22 @@ async function storeDo(path,body,what,label,close){
   catch(e){flash(e.message);}}
 function flash(m,label){st.flash=m;st.flashLabel=label||null;st.flashT=Date.now()+1100;setTimeout(render,1150);render();}
 
-document.addEventListener('keydown',e=>{const k=e.key.toLowerCase();
+// ---------- mock knobs (dev only: --mock server) ----------
+// Sliders write the stored scene value via /param, exactly what a real knob turn
+// changes, so the touch detection / hero / WAVE highlight run unmodified.
+const mk={};
+function mockKnobs(){const box=document.getElementById('mockknobs'),on=!!(M_&&M_.mode==='mock');
+  box.hidden=!on;if(!on)return;
+  const g=document.getElementById('mk');
+  if(!g.children.length)MKEYS.forEach(k=>{const l=document.createElement('span'),r=document.createElement('input');
+    l.textContent=k;r.type='range';r.min=BIPOLAR[k]?-1:0;r.max=1;r.step=0.005;
+    r.onchange=()=>r.blur();                                   // release: resume syncing from /state
+    r.oninput=()=>api('/param',{sound:st.sound,scene:st.scene,name:k,value:+r.value}).catch(e=>flash(e.message));
+    g.append(l,r);mk[k]=r;});
+  const s=snd();if(!s)return;
+  for(const k of MKEYS)if(document.activeElement!==mk[k])mk[k].value=s[st.scene][k];}
+
+document.addEventListener('keydown',e=>{if(e.target.tagName==='INPUT')return;const k=e.key.toLowerCase();
   if(e.key==='ArrowUp'||e.key==='ArrowLeft'){enc(-1);e.preventDefault();}
   else if(e.key==='ArrowDown'||e.key==='ArrowRight'){enc(1);e.preventDefault();}
   else if(e.key==='Enter'||e.key===' '){push();e.preventDefault();}
@@ -398,6 +505,9 @@ document.addEventListener('keydown',e=>{const k=e.key.toLowerCase();
   else if(k===',')btn('SOUNDL'); else if(k==='.')btn('SOUNDR');
   else if(k==='b')btn('SCENE'); else if(k==='f')btn('FILE'); else if(k==='v')btn('VIEW');});
 cv.addEventListener('wheel',e=>{enc(e.deltaY>0?1:-1);e.preventDefault();},{passive:false});
+if(EMBED)document.body.classList.add('embed');
+// WAVE animates (grain dots) at ~30 fps; other views redraw on poll/input only
+setInterval(()=>{if(st.view==='WAVE'&&!st.overlay&&M_&&M_.connected)render();},33);
 applySize();poll();
 </script>
 </body>

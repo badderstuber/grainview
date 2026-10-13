@@ -94,6 +94,12 @@ def check_args(sound=None, scene=None, name=None, src=None):
         raise ApiError(f"unknown mod source {src!r}")
 
 
+def mock_only(be):
+    if be.mode != "mock":
+        raise ApiError("mock only")
+    return be
+
+
 def clamp_param(name, v):
     _, lo, hi = P.PARAMS[name]
     return min(max(float(v), lo), hi)
@@ -130,11 +136,13 @@ class MockBackend:
             mod = {sc: {s: {k: 0.0 for k in NAMES} for s in SRCS} for sc in "AB"}
             mod["A"]["RAND"]["SIZE"] = 0.4
             mod["B"]["X"]["PITCH"] = -0.25
-            self.sounds.append({"folder": 1, "cursors": {0: 0, 1: cur or 0, 2: 2},
+            self.sounds.append({"folder": 1, "cursors": {0: 0, 1: cur or 0, 2: 2}, "link_rs": 0, "link_sp": 0,
                                 "file": None if cur is None else self.files[cur],
                                 "scenes": scenes, "mod": mod})
         self.store = {"project": 0, "projects": [0, 1, 2, 3, 8], "presets": [0, 1, 4],
                       "locked": [1], "preset": 0}
+        self.sync = 0
+        self.clock_period = 0.5         # fake clock at the SYNC input: 120 BPM
         self.lock = threading.Lock()
 
     def snapshot(self):
@@ -146,10 +154,12 @@ class MockBackend:
                 "mode": self.mode, "connected": True, "error": None,
                 "selected": self.selected, "playing": self.playing,
                 "edit_scene": self.edit_scene, "morph": m, "sd_state": self.sd_state, "live": live,
+                "sync": self.sync, "clock_period": self.clock_period,
                 "store": json.loads(json.dumps(self.store)),
                 "sounds": [{"folder": FOLDER_NAMES[s["folder"]], "file": s["file"],
                             "cursor": s["cursors"][s["folder"]], "A": dict(s["scenes"]["A"]),
                             "B": dict(s["scenes"]["B"]),
+                            "link_rs": s["link_rs"], "link_sp": s["link_sp"],
                             "mod": json.loads(json.dumps(s["mod"]))}
                            for s in self.sounds],
             }
@@ -178,6 +188,19 @@ class MockBackend:
         check_args(sound, scene, name)
         with self.lock:
             self.sounds[sound]["scenes"][scene][name] = clamp_param(name, value)
+
+    def mock_mode(self, sound, link_rs=None, link_sp=None, sync=None):
+        """Mock only: the panel's RATE-SIZE / SIZE-PITCH link buttons (per sound)
+        and the RATE sync setting - read-only flags on a real module."""
+        check_args(sound=sound)
+        with self.lock:
+            s = self.sounds[sound]
+            if link_rs is not None:
+                s["link_rs"] = int(bool(link_rs))
+            if link_sp is not None:
+                s["link_sp"] = int(bool(link_sp))
+            if sync is not None:
+                self.sync = int(bool(sync))
 
     def set_mod(self, sound, scene, src, name, value):
         check_args(sound, scene, name, src)
@@ -450,6 +473,7 @@ class SwdBackend:
 
 STATIC = {
     "/font_compare.html": ("font_compare.html", "text/html; charset=utf-8"),
+    "/wave_compare.html": ("wave_compare.html", "text/html; charset=utf-8"),
     "/fonts/gv_fonts.js": ("fonts/gv_fonts.js", "text/javascript; charset=utf-8"),
     "/gv_draw.js": ("gv_draw.js", "text/javascript; charset=utf-8"),
     "/gv_units.js": ("gv_units.js", "text/javascript; charset=utf-8"),
@@ -514,6 +538,8 @@ def make_handler(be):
                                            a.get("name"), a.get("value")),
                 "/preset": lambda: be.preset(a.get("action"), a.get("n")),
                 "/project": lambda: be.project(a.get("action"), a.get("n", 0)),
+                "/mock_mode": lambda: mock_only(be).mock_mode(a.get("sound"), a.get("link_rs"),
+                                                              a.get("link_sp"), a.get("sync")),
                 "/load": lambda: be.load(int(a.get("index", -1)), folder_arg(a.get("folder"))),
             }
             fn = routes.get(self.path)

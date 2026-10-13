@@ -62,7 +62,8 @@ function fit(f, s, maxW) {
 // ACTUAL = the SSD1327's 26.7 mm active area at real size. Browsers assume
 // 96 CSS px/inch, real screens differ, so a ruler calibrates px/mm (saved;
 // shared by every page served from the same origin).
-const OLED_MM = 26.7, RULER_MM = 50, ZOOM = 3.5;
+const OLED_MM = 26.7, RULER_MM = 50;
+const ZOOM = +new URLSearchParams(location.search).get('zoom') || 3.5;   // ?zoom=N (wave_compare embeds)
 const sz = {actual: localStorage.gvActual === '1', pxPerMm: +localStorage.gvPxPerMm || 96 / 25.4};
 function sizeSave() { localStorage.gvActual = sz.actual ? '1' : '0'; localStorage.gvPxPerMm = sz.pxPerMm; }
 // Each lit OLED pixel = one square. ZOOM snaps to whole device pixels (crisp);

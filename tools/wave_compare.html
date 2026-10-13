@@ -1,0 +1,105 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>GRAINVIEW — WAVE styles</title>
+<style>
+  body{background:#0e1012;color:#c9d2d8;font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;
+       margin:0;padding:24px;display:flex;gap:32px;flex-wrap:wrap;align-items:flex-start}
+  h1{font-size:16px;margin:0 0 2px}
+  .sub{color:#7d8893;font-size:12px;margin-bottom:14px}
+  .grid{display:grid;grid-template-columns:repeat(2,max-content);gap:18px}
+  .card{background:#17191c;border:1px solid #2a3137;border-radius:12px;padding:12px}
+  .card h2{font-size:13px;margin:0 0 2px;font-family:ui-monospace,Menlo,monospace}
+  .card p{margin:0 0 10px;color:#7d8893;font-size:12px;max-width:390px}
+  iframe{border:0;display:block;background:#000}
+  .side{width:300px;position:sticky;top:24px;max-height:calc(100vh - 48px);overflow-y:auto}   /* stays put while the screens scroll */
+  .side h2{font-size:14px;margin:0 0 6px}
+  .row{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
+  button{background:#22282c;color:#c7d0d6;border:1px solid #454e54;border-radius:8px;
+         padding:7px 9px;font:600 11px ui-monospace,Menlo,monospace;cursor:pointer}
+  button:hover{background:#2c343a}button:active{background:#39434a}
+  button.on{background:#c9d2d8;color:#0e1012;border-color:#c9d2d8}
+  button:disabled{opacity:.4;cursor:default}
+  #mk{display:grid;grid-template-columns:max-content 1fr max-content;gap:2px 10px;align-items:center;
+      font:11px ui-monospace,Menlo,monospace;color:#9aa6ad}
+  #mk input{width:100%;margin:0}
+  #who{font:12px ui-monospace,Menlo,monospace;color:#9aa6ad;margin-bottom:8px}
+  .note{color:#6b767d;font-size:12px;margin-top:14px}
+</style>
+</head>
+<body>
+  <div>
+    <h1>WAVE styles</h1>
+    <div class="sub">four GRAINVIEW emulators, one module — move a knob, watch them all</div>
+    <div class="grid" id="grid"></div>
+  </div>
+
+  <div class="side">
+    <h2>Module</h2>
+    <div id="who">connecting…</div>
+    <div class="row">
+      <button onclick="sel(-1)">SOUND‹</button>
+      <button onclick="sel(1)">SOUND›</button>
+      <button onclick="post('/scene',{scene:M_.edit_scene==='A'?'B':'A'})">SCENE</button>
+      <button onclick="post('/play',{})" title="make the selected sound the playing one (only it makes grains)">PLAY SEL</button>
+    </div>
+    <h2>Mock panel buttons</h2>
+    <div class="row" id="modes">
+      <button data-k="link_rs" title="RATE-SIZE link (selected sound): RATE = overlap 1-8 grains per grain length">R›S LINK</button>
+      <button data-k="link_sp" title="SIZE-PITCH link (selected sound): grain length divided by the pitch ratio">S›P LINK</button>
+      <button data-k="sync" title="RATE synced to a clock (mock: 120 BPM): RATE = division /16..x16">SYNC</button>
+    </div>
+    <h2>Mock knobs</h2>
+    <div id="mk"></div>
+    <div class="note">Sliders write the stored scene value of the selected sound / edited
+      scene (what a real knob changes). On a live module they're hidden — turn the real knobs.
+      Panel buttons mirror the module's lit link buttons; on a live module they show its
+      real state (read-only). Each screen runs its own grain simulation, so dot positions differ; rates and
+      lifetimes are the same. SET › Wave style picks a style in the main emulator.</div>
+  </div>
+
+<script src="gv_units.js"></script>
+<script>
+const STYLES=[
+  ['A','Pure','A visual knob just changes the picture. TONE / BLUR / mod depths still pop the hero.'],
+  ['B','Status readout','Any knob on WAVE: the picture changes and "SIZE 507ms" shows in the status line. No hero.'],
+  ['C','Readout + MORPH','B plus a hairline MORPH meter under the wave box.'],
+  ['D','Readout, static dots','B, but grain dots stay where they launched (compare with B: does travel read better?).']];
+const ZOOMX=3, PX=128*ZOOMX;
+const g=document.getElementById('grid');
+for(const [k,name,desc] of STYLES){const c=document.createElement('div');c.className='card';
+  c.innerHTML=`<h2>${k} · ${name}</h2><p>${desc}</p>`+
+    `<iframe src="/?embed=1&wave=${k}&zoom=${ZOOMX}" width="${PX}" height="${PX}" scrolling="no"></iframe>`;
+  g.append(c);}
+
+const KEYS=['START','WRAP','SCAN','SHAPE','SIZE','RATE','PITCH','TONE','LEVEL','BLUR'];
+const BIPOLAR={SCAN:1,TONE:1};
+let M_=null;const mk={},mv={};
+async function post(path,body){await fetch(path,{method:'POST',body:JSON.stringify(body)});}
+function sel(d){if(M_)post('/select',{sound:(M_.selected+8+d)%8});}
+function ctx(s,sc){return {linkRS:s.link_rs===1,linkSP:s.link_sp===1,sync:M_.sync===1,size:s[sc].SIZE,pitch:s[sc].PITCH};}
+KEYS.forEach(k=>{const l=document.createElement('span'),r=document.createElement('input'),v=document.createElement('span');
+  l.textContent=k;r.type='range';r.min=BIPOLAR[k]?-1:0;r.max=1;r.step=0.005;
+  r.onchange=()=>r.blur();
+  r.oninput=()=>M_&&post('/param',{sound:M_.selected,scene:M_.edit_scene,name:k,value:+r.value});
+  document.getElementById('mk').append(l,r,v);mk[k]=r;mv[k]=v;});
+// lit = on, like the module's panel buttons; per sound except SYNC
+document.querySelectorAll('#modes button').forEach(b=>b.onclick=()=>{if(!M_)return;
+  const on=b.dataset.k==='sync'?M_.sync:M_.sounds[M_.selected][b.dataset.k];
+  post('/mock_mode',{sound:M_.selected,[b.dataset.k]:on?0:1});});
+async function poll(){
+  try{M_=await (await fetch('/state')).json();
+    const s=M_.sounds[M_.selected],sc=M_.edit_scene;
+    document.getElementById('who').textContent=`${M_.mode.toUpperCase()} · S${M_.selected+1} scene ${sc} · `+
+      (M_.playing===M_.selected?'playing':`S${M_.playing+1} plays (no grains here)`)+` · ${s.file||'empty'}`;
+    document.querySelectorAll('#mk input,#modes button').forEach(r=>r.disabled=M_.mode!=='mock');
+    document.querySelectorAll('#modes button').forEach(b=>b.classList.toggle('on',
+      !!(b.dataset.k==='sync'?M_.sync:s[b.dataset.k])));
+    for(const k of KEYS){if(document.activeElement!==mk[k])mk[k].value=s[sc][k];mv[k].textContent=unitText(k,s[sc][k],ctx(s,sc));}}
+  catch(e){document.getElementById('who').textContent='server not running';}
+  setTimeout(poll,150);}
+poll();
+</script>
+</body>
+</html>

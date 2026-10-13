@@ -5,9 +5,71 @@ Multigrain** (3U granular sampler) — it's hard to use without a screen and the
 audio-file workflow is confusing. This file is the single place to pick the
 project back up if I lose the chat session.
 
-_Last updated: 2026-10-12._
+_Last updated: 2026-10-13._
 
 ---
+
+## Update 2026-10-13 — WAVE view = live grain animation, style B chosen ✅ (mock only)
+
+Worked without the module (`grainview_server.py --mock`). Leo's direction: WAVE shows
+**no values** — the waveform fills the box and turning a knob changes the *picture*;
+numbers live in PARM / the hero. Inspired by the Evil Pet + Tasty Chips GR-1 grain dots.
+
+- **Grain dots = one dot per grain**, simulated from the knobs (not the engine's real
+  grain voices — SWD polling is far too slow to animate those). Model from the manual's
+  "anatomy of a grain" + SCAN text: RATE = grains/s (the density control; RATE-SIZE link
+  + SYNC aware); SIZE = dot lifetime (floor 80 ms) and travel distance; PITCH = read
+  speed (dot travels SIZE x pitch-ratio of the sample); SHAPE = brightness over life,
+  scaled by LEVEL; launch point = the **scan playhead**: grains launch from START, SCAN
+  steps each *successive grain's* start through START..START+WRAP (fwd/back, centred =
+  static), reset to START on SOUND press. Dots sit above/below a thin wave band. Only
+  the playing sound makes grains. Dot count = grains overlapping (RATE x SIZE).
+- **Fixed:** the old dotted SCAN "position" line was wrong (SCAN is a per-grain step,
+  not a position) — it's now the playhead.
+- **Styles compared side by side** in new `tools/wave_compare.html` (4 embedded
+  emulators + shared mock knobs): A pure / **B status readout** / C B+MORPH hairline /
+  D B with static dots. **Leo picked B**: any knob on WAVE changes the picture and shows
+  small in the status line (`SIZE 427ms`), no hero on WAVE. B is the default; A/C/D +
+  compare page kept until judged on the real OLED, then strip the losers.
+- **Placeholders:** `SCAN_STEP` (0.05 window/grain at full SCAN — map from the grain
+  engine), sample length faked 2–10 s (`sampleSec`; real = WAV header, see preview spike),
+  no REVERSE, `GRAIN_SPREAD` visual only, dot size / `WAVE_AMP` to judge on the OLED.
+- **Also:** emulator `?wave=A..D`, `?embed=1`, SET › Wave style; `gv_draw.js` `?zoom=N`;
+  mock knob sliders (emulator legend + compare page) drive `/param` like real knobs.
+
+## Update 2026-10-12 (night, later) — WAV-preview spike ✅ (read file off SD → play on the laptop)
+
+Idea (Leo): when browsing SD WAVs to load, hear a **raw, unprocessed preview** of the
+file so you pick the right one — and play it **through the browser/phone, not the module**
+(keeps the engine silent + the patch untouched; module playback would granular-process it).
+**Spike PROVEN on hardware 2026-10-12** on throwaway Project05: read `/Wavs[3]`
+(Cascadia loop) off the card over SWD, reconstructed, `afplay`'d on the Mac — Leo heard
+the beat. Module never sounded, patch untouched.
+
+- **Reader:** `FUN_0801fb94(folder, name, buf, max, &n)` — raw file read. Seeks past the WAV
+  header, `f_read`s PCM into `buf`, `*n = bytes>>2`. folder 0/1/2 = project//Wavs//Recs;
+  `name` = ptr to the RAM filename (/Wavs list `0x30008800` + idx*0x100). `max` is in
+  4-byte units, so it reads ≤ `max*4` bytes. Returns 0 = OK.
+- **5th arg (`&n`) is on the STACK** (AAPCS r0-r3 only hold 4). The existing call helpers
+  (`mg_call`/`mg_load`) only set r0-r3, so the spike script pushes it: catch the idle loop,
+  save full context, `sp-=16` + write `&n` at `[sp]`, set r0-r3 + LR=catch(`0x08000000` BP)
+  + PC=reader, resume, catch the return, **restore the whole idle context**, resume. One
+  idle-loop halt → tiny audio blip while browsing (inaudible on the Pico). Clean recovery
+  on timeout. Tool: **`tools/spike_preview.py [idx] [max]`** (+ `tools/spike_recon.py`).
+- **Scratch buffer = top of SDRAM `0xC3F00000`** (`&n` word at `0xC3FE0000`). SDRAM bank =
+  `0xC0000000..0xC3FFFFFF` (**64 MB**); sounds hold **no raw SDRAM pointer** (allocator-
+  managed), so buffers can't be found via the struct — the top is clear of them. `0xD0000000`
+  unmapped. Verified the read overwrote scratch; nothing else disturbed.
+- **Format: card WAVs are 16-bit PCM** (NOT 32-bit float — first guess wrong; `bytes>>2`
+  is 4-byte *words* = 2 samples). Heard correct as **mono 48 k**; real build must read the
+  44-byte header for exact rate/ch/bits instead of guessing.
+- **TO FINISH (parked, Leo back later):** (1) read the WAV header over SWD for exact format;
+  (2) add `GET /preview?folder=&index=` to `grainview_server.py` (header+PCM over SWD → .wav
+  blob); (3) FILE overlay: scroll → **debounced** Web Audio preview (play-on-land / stop-on-
+  move), cap ~1–2 s. Same architecture later on the Pico (SWD read → WiFi → phone).
+- **State left:** module on **Project05** (throwaway), GRAINVIEW server **stopped**. Earlier
+  this session the live app (`grainview_server.py`, port 8745) was re-confirmed reading the
+  module end-to-end (`/state` clean, connected).
 
 ## Update 2026-10-12 (night) — two open hardware checks closed ✅
 

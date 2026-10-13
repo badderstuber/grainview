@@ -145,6 +145,18 @@ designed once here, then ported to LVGL on the Pico (Phase 3).
       jumpers, EC11 push encoder module, 6 tactile buttons. First use: Pico as a
       **dumb USB screen** mirroring the emulator framebuffer (no UI port needed).
 - [ ] Real waveform for WAVE (needs sample data location in RAM, or read the WAV off SD).
+- [x] **WAVE = grain animation** (2026-10-13, mock): no values on WAVE, waveform fills the
+      box, one dot per simulated grain (RATE/SIZE/PITCH/SHAPE/LEVEL + scan playhead), touched
+      knob shows in the status line (**style B, chosen**). `tools/wave_compare.html` compares
+      styles. TODO: real `SCAN_STEP`, real sample length (WAV header), REVERSE,
+      judge dot size + band on the real OLED, then strip styles A/C/D.
+- [ ] **Raw SD file preview (play on the device, not the module)** — audition a WAV while
+      browsing, unprocessed, so you pick the right one before loading. **Spike PROVEN on
+      hardware 2026-10-12** (`tools/spike_preview.py`): `FUN_0801fb94` reads raw PCM off SD
+      over SWD into top-of-SDRAM scratch, reconstructed + played on the Mac, module silent.
+      Card WAVs = 16-bit PCM. TO FINISH: read the WAV header for exact format, add
+      `GET /preview?folder&index` to the server (→ .wav blob), FILE overlay scroll →
+      debounced Web Audio preview. See PROGRESS.md 2026-10-12 (night, later) for the recipe.
 
 ### Phase 3 — Dedicated "Screen" eurorack module (clutter-free endgame) ⭐
 A standalone RP2040-powered module with its own TFT + encoder/buttons that sits
