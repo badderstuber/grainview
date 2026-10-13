@@ -9,6 +9,51 @@ _Last updated: 2026-10-13._
 
 ---
 
+## Update 2026-10-13 (evening) — Settings.mgs mapped offline (Ghidra) ✅ (hardware check pending)
+
+- Load `FUN_080277ac` / save `FUN_080225a4` / deserialiser `FUN_0802695c` / serialiser
+  `FUN_08021d58` / defaults `FUN_08009738`. Settings object = **`0x24025C60`** (anchored by the
+  known project byte at +0x14 and size-mode byte at +0x165). File = u32 checksum + version 0x11
+  + version-gated fields; also holds the **Default Sound + default Live Sound** records.
+- Identified from setter callbacks + readers: Theme, Session count, Input trim, Resampling,
+  Normalize, 2 Thresholds, Looper size, NEXT/RESET, Rand polarity, Grain max (order = manual),
+  Idle return, Pitch out, Knob mode, Auto-collect, Grain size scaling, SELECT range. Unknown:
+  +0x81 and three v1.4 flags; +0x15c9 probably Gate delay. Full table + hardware checklist in
+  `docs/SETTINGS.md`. **Writes must call the record's setter** (side effects + autosave).
+- New headless Ghidra scripts: `ghidra_proj/mg_settings.py`, `mg_refs.py`, `mg_ptrs.py`.
+- **Preset + sound settings mapped too.** Preset object = the sound array `0x24020B84` (+0x4f80
+  trailer): preset#, scene, sound, Mod out A/B, Thru, Latch, Sync (`0x24025BC1` = a *preset*
+  field), Thru blur bypass, a 4-flag array (freeze mod assigns?); 2 UI-only bytes unknown. Preset
+  setters only set the autosave flag → live write = RAM + flag. Sound record: Sync mode, links,
+  quantizer (u16 notes +0x554), Quant mode, Fine tune (f32 +0x90c), Ping-pong, Live / Choke /
+  Gate (+0x945 / +0x95d / +0x975). Tables + checklist in `docs/SETTINGS.md`. Script `mg_decomp.py`.
+- **Live settings reads built** (untested on hardware): RAM locations in `gv_settings.json`
+  (`ram`), server reads them once a second (`read_settings`, batched block reads), strict
+  decoding (implausible → `-`). Tested against a fake target. Gate delay + SELECT range not read
+  yet. Live edits refused in the UI until the hardware check.
+
+## Update 2026-10-13 (later) — Settings menu: SETTINGS (per sound) + SETUP ✅ (mock only)
+
+- Read the manual (now in `docs/`) for every setting; catalogue in **`tools/gv_settings.json`**,
+  spec + decisions in **`docs/SETTINGS.md`**. Groups: MODULE (Settings.mgs) / PRESET / SOUND /
+  GRAINVIEW (+ SAMPLE later, with sampling). State values, actions, and things shown in other
+  views left out on purpose (see the spec).
+- **Leo's structure:** all four views are per sound — **SETTINGS view = the focused sound's
+  settings** (SOUND‹› flips sounds). New **SETUP** button (in the A/B LEDs' place; LEDs dropped
+  for now) opens an overlay with MODULE / PRESET / SAMPLE (soon) / GRAINVIEW.
+- Edit model: push row → value inverts → turn → push keeps / BACK cancels. Status line shows
+  the row's **panel shortcut** (`SYS>THRU`). Scroll mark on long lists.
+- Server: `settings` in `/state` (mock: every setting at its default; live: links + sync only,
+  rest shows `-`), `POST /setting` validates against the catalogue (live refuses: not mapped).
+- Emulator buttons now laid out like the panel (BACK | VIEW FILE | SOUND‹ SOUND› | A/B SETUP),
+  `S` key = SETUP. `panel_mock.html` updated.
+- **Quantizer keyboard page** (SETTINGS › Quantizer): one-octave keyboard, push a note to
+  toggle; ROOT (turning transposes the scale, replaces the module's long-press) and QUANT ON
+  fields; scale names recognised (row shows `C MAJ`). Spec in `docs/SETTINGS.md`.
+- **Bug fixed:** today's "SOUND press resets the scan" edit had commented out `st.busy++` in
+  `selectSound` → after a SOUND‹› press the app would stop following sound/scene changes made
+  on the module (live only; mock didn't show it).
+
 ## Update 2026-10-13 — WAVE view = live grain animation, style B chosen ✅ (mock only)
 
 Worked without the module (`grainview_server.py --mock`). Leo's direction: WAVE shows

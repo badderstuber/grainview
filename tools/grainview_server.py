@@ -62,6 +62,10 @@ G_CLOCK_PERIOD = 0x24020834   # f32 global: smoothed clock period, s (clamped 0.
 NAMES = list(P.PARAMS)            # START SCAN WRAP SIZE RATE PITCH LEVEL TONE SHAPE BLUR
 SRCS = list(P.MOD_SRC)            # RAND X Y Z
 FOLDER_NAMES = {0: "project", 1: "Wavs", 2: "Recs"}
+# Settings catalogue (docs/SETTINGS.md): module / preset / sound groups, shared with the emulator.
+with open(os.path.join(HERE, "gv_settings.json")) as _f:
+    SETTINGS_CAT = {g: v for g, v in json.load(_f).items() if not g.startswith("_")}
+FLAG_KEYS = ("link_rs", "link_sp")     # sound settings that are also top-level sound fields
 FOLDER_IDX = {v: k for k, v in FOLDER_NAMES.items()}
 
 
@@ -92,6 +96,105 @@ def check_args(sound=None, scene=None, name=None, src=None):
         raise ApiError(f"unknown param {name!r}")
     if src is not None and src not in P.MOD_SRC:
         raise ApiError(f"unknown mod source {src!r}")
+
+
+def setting_value(scope, key, value):
+    """Validate + normalise a settings write against the catalogue."""
+    if scope not in SETTINGS_CAT:
+        raise ApiError("scope must be module, preset or sound")
+    e = next((e for e in SETTINGS_CAT[scope] if e["key"] == key), None)
+    if e is None:
+        raise ApiError(f"unknown {scope} setting {key!r}")
+    if e["type"] == "info":
+        raise ApiError(f"{key} is read-only")
+    if e["type"] == "enum":
+        if not isinstance(value, int) or not 0 <= value < len(e["options"]):
+            raise ApiError(f"{key} must be 0..{len(e['options']) - 1}")
+        return value
+    if e["type"] == "num":
+        v = min(max(float(value), e["min"]), e["max"])
+        return round(e["min"] + round((v - e["min"]) / e["step"]) * e["step"], e.get("dp", 3))
+    if e["type"] == "quant":
+        notes = value.get("notes") if isinstance(value, dict) else None
+        if not (isinstance(notes, list) and len(notes) == 12) or value.get("root") not in range(12):
+            raise ApiError("quantizer must be {notes: [12 bools], root: 0..11}")
+        return {"notes": [bool(n) for n in notes], "root": value["root"]}
+    raise ApiError(f"{key}: unsupported type")
+
+
+# ---- live settings: read-only, from the catalogue's "ram" locations (docs/SETTINGS.md) ----
+SETTINGS_EVERY = 1.0                   # s between live settings reads (they rarely change)
+RAM_SIZE = {"bool": 1, "enum": 1, "f32": 4, "quant": 2}
+
+
+def ram_entries():
+    return [(g, e) for g in ("module", "preset", "sound") for e in SETTINGS_CAT[g] if "ram" in e]
+
+
+def ram_addr(e, sound=None, key="off"):
+    r = e["ram"]
+    if "addr" in r:                     # absolute (module / preset; sound Sync is a preset byte)
+        return int(r["addr"], 16)
+    return L.SOUND_BASE + sound * L.SOUND_STRIDE + int(r[key], 16)
+
+
+def ram_decode(e, get, sound=None):
+    """Raw RAM -> the catalogue's value; None (UI shows -) if it isn't a value we understand."""
+    t, a = e["ram"]["t"], ram_addr(e, sound)
+    if t == "bool":
+        return 1 if get(a, 1)[0] else 0
+    if t == "enum":
+        v = get(a, 1)[0]
+        return v if v < len(e["options"]) else None
+    if t == "f32":
+        v = P.f32(int.from_bytes(get(a, 4), "little"))
+        if not e["min"] - e["step"] <= v <= e["max"] + e["step"]:
+            return None
+        return round(min(max(v, e["min"]), e["max"]), e.get("dp", 3))
+    if t == "quant":
+        mask = int.from_bytes(get(a, 2), "little")
+        root = int.from_bytes(get(ram_addr(e, sound, "root"), 4), "little")
+        return {"notes": [bool(mask >> i & 1) for i in range(12)], "root": root if root < 12 else 0}
+    return None
+
+
+class SpanReader:
+    """Batch scattered small reads into a few block reads."""
+    GAP = 48
+
+    def __init__(self, t, wants):
+        spans = []
+        for a, n in sorted(set(wants)):
+            if spans and a <= spans[-1][1] + self.GAP:
+                spans[-1][1] = max(spans[-1][1], a + n)
+            else:
+                spans.append([a, a + n])
+        self.blocks = [(lo, bytes(t.read_memory_block8(lo, hi - lo))) for lo, hi in spans]
+
+    def get(self, a, n):
+        for lo, b in self.blocks:
+            if lo <= a and a + n <= lo + len(b):
+                return b[a - lo:a - lo + n]
+        raise KeyError(hex(a))
+
+
+def read_settings(t):
+    """{module: {...}, preset: {...}, sounds: [8 x {...}]} from live RAM."""
+    want = []
+    for g, e in ram_entries():
+        for n in range(8) if g == "sound" else [None]:
+            want.append((ram_addr(e, n), RAM_SIZE[e["ram"]["t"]]))
+            if e["ram"]["t"] == "quant":
+                want.append((ram_addr(e, n, "root"), 4))
+    rd = SpanReader(t, want)
+    out = {"module": {}, "preset": {}, "sounds": [{} for _ in range(8)]}
+    for g, e in ram_entries():
+        if g == "sound":
+            for n in range(8):
+                out["sounds"][n][e["key"]] = ram_decode(e, rd.get, n)
+        else:
+            out[g][e["key"]] = ram_decode(e, rd.get)
+    return out
 
 
 def mock_only(be):
@@ -136,13 +239,19 @@ class MockBackend:
             mod = {sc: {s: {k: 0.0 for k in NAMES} for s in SRCS} for sc in "AB"}
             mod["A"]["RAND"]["SIZE"] = 0.4
             mod["B"]["X"]["PITCH"] = -0.25
+            settings = {e["key"]: json.loads(json.dumps(e["default"])) for e in SETTINGS_CAT["sound"]
+                        if e["key"] not in FLAG_KEYS + ("sync",)}
             self.sounds.append({"folder": 1, "cursors": {0: 0, 1: cur or 0, 2: 2}, "link_rs": 0, "link_sp": 0,
+                                "settings": settings,
                                 "file": None if cur is None else self.files[cur],
                                 "scenes": scenes, "mod": mod})
         self.store = {"project": 0, "projects": [0, 1, 2, 3, 8], "presets": [0, 1, 4],
                       "locked": [1], "preset": 0}
         self.sync = 0
         self.clock_period = 0.5         # fake clock at the SYNC input: 120 BPM
+        self.settings = {g: {e["key"]: e["default"] for e in SETTINGS_CAT[g]} for g in ("module", "preset")}
+        self.sounds[0]["settings"]["quantizer"] = {     # S1: C major, so the row has something to show
+            "notes": [n in (0, 2, 4, 5, 7, 9, 11) for n in range(12)], "root": 0}
         self.lock = threading.Lock()
 
     def snapshot(self):
@@ -155,11 +264,14 @@ class MockBackend:
                 "selected": self.selected, "playing": self.playing,
                 "edit_scene": self.edit_scene, "morph": m, "sd_state": self.sd_state, "live": live,
                 "sync": self.sync, "clock_period": self.clock_period,
+                "settings": json.loads(json.dumps(self.settings)),
                 "store": json.loads(json.dumps(self.store)),
                 "sounds": [{"folder": FOLDER_NAMES[s["folder"]], "file": s["file"],
                             "cursor": s["cursors"][s["folder"]], "A": dict(s["scenes"]["A"]),
                             "B": dict(s["scenes"]["B"]),
                             "link_rs": s["link_rs"], "link_sp": s["link_sp"],
+                            "settings": {**json.loads(json.dumps(s["settings"])), "link_rs": s["link_rs"],
+                                         "link_sp": s["link_sp"], "sync": self.sync},
                             "mod": json.loads(json.dumps(s["mod"]))}
                            for s in self.sounds],
             }
@@ -188,6 +300,21 @@ class MockBackend:
         check_args(sound, scene, name)
         with self.lock:
             self.sounds[sound]["scenes"][scene][name] = clamp_param(name, value)
+
+    def set_setting(self, scope, key, value, sound=None):
+        v = setting_value(scope, key, value)
+        with self.lock:
+            if scope != "sound":
+                self.settings[scope][key] = v
+                return
+            check_args(sound=sound)
+            s = self.sounds[sound]
+            if key in FLAG_KEYS:
+                s[key] = v
+            elif key == "sync":          # one global flag in RAM (0x24025bc1), see docs/SETTINGS.md
+                self.sync = v
+            else:
+                s["settings"][key] = v
 
     def mock_mode(self, sound, link_rs=None, link_sp=None, sync=None):
         """Mock only: the panel's RATE-SIZE / SIZE-PITCH link buttons (per sound)
@@ -283,6 +410,7 @@ class SwdBackend:
         self.t = None
         self.snap = {"mode": self.mode, "connected": False, "error": "connecting",
                      "sounds": []}
+        self.st, self.st_t = None, 0.0   # live settings cache (read every SETTINGS_EVERY s)
         threading.Thread(target=self._poll, daemon=True).start()
 
     def _connect(self):
@@ -315,6 +443,8 @@ class SwdBackend:
 
     def _read(self):
         t = self.t
+        if self.st is None or time.time() - self.st_t >= SETTINGS_EVERY:
+            self.st, self.st_t = read_settings(t), time.time()
         f32 = lambda b, off: P.f32(int.from_bytes(b[off:off + 4], "little"))  # noqa: E731
         sounds = []
         for n in range(8):
@@ -339,13 +469,19 @@ class SwdBackend:
                 "cursor": L.i32(t, L.CURSORS + (folder * 8 + n) * 4) if known else None,
                 "link_rs": L.u8(t, base + FLAG_LINK_RS), "link_sp": L.u8(t, base + FLAG_LINK_SP),
             })
+            # cached settings, with the per-poll link flags (fresher)
+            sounds[-1]["settings"] = {**self.st["sounds"][n], **{k: sounds[-1][k] for k in FLAG_KEYS}}
+        sync = L.u8(t, G_SYNC)
+        for s in sounds:
+            s["settings"]["sync"] = sync
         return {
             "mode": self.mode, "connected": True, "error": None,
             "selected": L.u8(t, L.CUR_SOUND), "playing": L.u32(t, L.PLAYING),
             "edit_scene": "B" if L.u8(t, P.EDIT_SCENE) else "A",
             "morph": round(P.f32(t.read_memory(P.LIVE["MORPH"])), 4),
             "sd_state": L.u32(t, L.SD_STATE),
-            "size_mode": L.u8(t, G_SIZE_MODE), "sync": L.u8(t, G_SYNC),
+            "size_mode": L.u8(t, G_SIZE_MODE), "sync": sync,
+            "settings": {"module": self.st["module"], "preset": self.st["preset"]},
             "clock_period": round(P.f32(t.read_memory(G_CLOCK_PERIOD)), 5),
             "live": {k: round(P.f32(t.read_memory(P.LIVE[k])), 4) for k in NAMES},
             "store": {k: v for k, v in PR.status(t).items()
@@ -407,6 +543,10 @@ class SwdBackend:
             P.write(t, sound, scene, name, v)
             P.sync_panel(t, sound, scene, name, v)
             P.mark_dirty(t)
+
+    def set_setting(self, scope, key, value, sound=None):
+        setting_value(scope, key, value)
+        raise ApiError(f"{key}: live writes not enabled yet (read-only), see docs/SETTINGS.md")
 
     def set_mod(self, sound, scene, src, name, value):
         check_args(sound, scene, name, src)
@@ -474,6 +614,7 @@ class SwdBackend:
 STATIC = {
     "/font_compare.html": ("font_compare.html", "text/html; charset=utf-8"),
     "/wave_compare.html": ("wave_compare.html", "text/html; charset=utf-8"),
+    "/gv_settings.json": ("gv_settings.json", "application/json"),
     "/fonts/gv_fonts.js": ("fonts/gv_fonts.js", "text/javascript; charset=utf-8"),
     "/gv_draw.js": ("gv_draw.js", "text/javascript; charset=utf-8"),
     "/gv_units.js": ("gv_units.js", "text/javascript; charset=utf-8"),
@@ -540,6 +681,8 @@ def make_handler(be):
                 "/project": lambda: be.project(a.get("action"), a.get("n", 0)),
                 "/mock_mode": lambda: mock_only(be).mock_mode(a.get("sound"), a.get("link_rs"),
                                                               a.get("link_sp"), a.get("sync")),
+                "/setting": lambda: be.set_setting(a.get("scope"), a.get("key"), a.get("value"),
+                                                   a.get("sound")),
                 "/load": lambda: be.load(int(a.get("index", -1)), folder_arg(a.get("folder"))),
             }
             fn = routes.get(self.path)

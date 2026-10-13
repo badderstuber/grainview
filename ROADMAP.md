@@ -141,6 +141,11 @@ designed once here, then ported to LVGL on the Pico (Phase 3).
       320 polls over 60 s on the selected sound, stored scene values bit-identical (p2p
       0.00000 across all params + mod depths), zero false heroes. Firmware only writes the
       stored values on real knob motion, so TOUCH_EPS (0.004) has huge margin.
+- [x] **Settings menu** (2026-10-13, mock): SETTINGS view = focused sound's settings; SETUP
+      overlay = MODULE / PRESET / SAMPLE (soon) / GRAINVIEW. Catalogue `tools/gv_settings.json`
+      (from the manual), spec `docs/SETTINGS.md`, `POST /setting` (mock only).
+      TODO: map each setting's RAM + persistence (Settings.mgs reader / preset trailer) for
+      live read + write; SAMPLE group with sampling. (Quantizer keyboard page ✅ same day.)
 - [ ] Hardware to buy (list agreed 2026-10-12): Pico 2 WH, SSD1327 (SPI), 2× half breadboards,
       jumpers, EC11 push encoder module, 6 tactile buttons. First use: Pico as a
       **dumb USB screen** mirroring the emulator framebuffer (no UI port needed).
@@ -185,12 +190,15 @@ web app over WiFi as an optional big-screen view.)
   names, values), 5×7 for secondary; big shapes for glance info (Metropolix style).
 - **Size:** 8 HP × 3U (4.03 cm × 12.85 cm).
 - **Brain:** RP2040 (Pico / Pico W), SWD master via PIO; LVGL UI.
-- **Controls:** push-encoder + **6 buttons** — BACK, VIEW, FILE, SOUND‹, SOUND›,
-  A/B — plus **2 A/B scene LEDs** (same colour; lit=active scene) beside the A/B btn.
+- **Controls:** push-encoder + **7 buttons** — BACK, VIEW, FILE, SOUND‹, SOUND›,
+  A/B, SETUP. (A/B scene LEDs dropped 2026-10-13 for SETUP — revisit tiny LEDs in the
+  A/B legend when the panel is finalised.)
 - **Panel layout** (top→bottom): screen · [BACK | encoder] · [VIEW | FILE] ·
-  [SOUND‹ | SOUND›] · [A/B btn | A/B LEDs].
+  [SOUND‹ | SOUND›] · [A/B | SETUP].
 - **4 views** (VIEW button cycles + encoder pages): WAVE · PARAM · MOD · SETTINGS
-  (renamed from PARM / SET 2026-10-13 — the status line has room).
+  (renamed from PARM / SET 2026-10-13 — the status line has room). **All 4 views are per
+  sound**; SETTINGS = the focused sound's settings. **SETUP** = overlay for MODULE / PRESET /
+  SAMPLE / GRAINVIEW settings. Spec: `docs/SETTINGS.md`.
   Where-am-I = **status line at the bottom** (page dots + view name, Metropolix
   style) — the top tab strip was dropped 2026-10-12 to give content the space
   (Leo: keep for now; fallback idea = tabs shown briefly on VIEW/turn).

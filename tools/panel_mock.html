@@ -17,7 +17,7 @@
 </head>
 <body>
   <h1>"GRAINVIEW" — companion screen module (8 HP · 3U), to scale</h1>
-  <div class="sub">128×128 greyscale OLED · push-encoder · 6 buttons · A/B scene LEDs.
+  <div class="sub">128×128 greyscale OLED · push-encoder · 7 buttons.
      4-wire SWD ribbon to the Multigrain JTRACE on the back. Working title.</div>
   <div class="wrap">
     <canvas id="panel"></canvas>
@@ -27,11 +27,13 @@
         <li><span class="k">OLED 128×128</span> — top, 2.67 cm square.</li>
         <li><span class="k">Encoder (push)</span> — page views; navigate; push to select.</li>
         <li><span class="k">BACK</span> — up a level.</li>
-        <li><span class="k">VIEW</span> — cycle WAVE·PARM·MOD·SET.</li>
+        <li><span class="k">VIEW</span> — cycle WAVE·PARAM·MOD·SETTINGS (all per sound).</li>
         <li><span class="k">FILE</span> — SD load / save.</li>
         <li><span class="k">SOUND ‹ ›</span> — change sound 1–8.</li>
-        <li><span class="k">A/B</span> — toggle scene; the <span class="k">A/B LEDs</span>
-            beside it show which is live (A green · B red).</li>
+        <li><span class="k">A/B</span> — toggle scene (the screen header shows it).</li>
+        <li><span class="k">SETUP</span> — module / preset / sample / GRAINVIEW settings.</li>
+        <li>A/B scene LEDs dropped 2026-10-13 — maybe tiny LEDs in the A/B legend
+            when the panel is finalised.</li>
       </ul>
       <h2>Physical</h2>
       <ul>
@@ -119,10 +121,9 @@ button(px(colL),py(90),mm(3.2),'‹');
 button(px(colR),py(90),mm(3.2),'›');
 g.fillStyle='#8a949c';g.textAlign='center';g.font=(2.3*S)+'px ui-monospace,Menlo,monospace';
 g.fillText('SOUND',px(W_mm/2),py(89));
-// row 4: A/B button + A/B scene LEDs
+// row 4: A/B + SETUP (scene LEDs dropped for now; sceneLED() kept for the panel revisit)
 button(px(colL),py(108),mm(3.2),'A/B');
-sceneLED(px(24),py(104.5),'#39d98a',true ,'A');   // A live (lit)
-sceneLED(px(24),py(111.5),'#39d98a',false,'B');   // B off (same colour, unlit)
+button(px(colR),py(108),mm(3.2),'SETUP');
 
 // footer
 g.fillStyle='#6b767d';g.textAlign='center';g.font=(2.2*S)+'px ui-monospace,Menlo,monospace';

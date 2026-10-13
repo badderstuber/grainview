@@ -1,0 +1,34 @@
+{
+  "_doc": "GRAINVIEW settings catalogue (spec: docs/SETTINGS.md), shared by grainview_server.py (mock defaults) and the emulator (labels / editing). Source: Multigrain manual v1.4. Types: enum = index into options; num = value in min..max by step (fmt: {v} is replaced); quant = {notes:[12 bools from C], root}; info = read-only text. panel = where it lives on the module (status-line hint). ram = where the live server reads it: addr (absolute) or off (in the sound record, 0x24020B84 + n*0x9f0); t = bool / enum (raw = option index) / f32 (range-checked) / quant (u16 note mask + root). From offline RE, hardware check pending (docs/SETTINGS.md); entries without ram show - on a live module. Labels <= 11 chars, values <= 7 chars (fit a 128 px row).",
+  "module": [
+    {"key": "rand_mod",     "label": "Rand mod",    "type": "enum", "options": ["UNI", "BI"], "default": 0, "panel": "SYS>RAND", "ram": {"addr": "0x24025DAD", "t": "enum"}},
+    {"key": "next_input",   "label": "NEXT input",  "type": "enum", "options": ["NEXT", "RESET"], "default": 0, "panel": "SYS>LATCH", "ram": {"addr": "0x24025D95", "t": "enum"}},
+    {"key": "auto_collect", "label": "Autocollect", "type": "enum", "options": ["OFF", "ON"], "default": 0, "panel": "SYS>X", "ram": {"addr": "0x24025E31", "t": "bool"}},
+    {"key": "gate_delay",   "label": "Gate delay",  "type": "num", "min": 0, "max": 10, "step": 0.5, "dp": 1, "fmt": "{v}ms", "default": 0, "panel": "SYS>START"},
+    {"key": "select_range", "label": "SELECT rng",  "type": "num", "min": 0.67, "max": 5, "step": 0.05, "dp": 2, "fmt": "{v}V", "default": 5, "panel": "SYS>WRAP"},
+    {"key": "grain_max",    "label": "Grain max",   "type": "enum", "options": ["4s", "4s/SMP", "8s/SMP", "FULL"], "default": 1, "panel": "SYS>SIZE", "ram": {"addr": "0x24025DC5", "t": "enum"}},
+    {"key": "size_scale",   "label": "Size scale",  "type": "enum", "options": ["OFF", "ON"], "default": 0, "panel": "SYS>R-S", "ram": {"addr": "0x24027241", "t": "bool"}},
+    {"key": "idle_return",  "label": "Idle return", "type": "enum", "options": ["OFF", "ON"], "default": 1, "panel": "SYS>CLEAR", "ram": {"addr": "0x24025DDD", "t": "bool"}},
+    {"key": "knob_mode",    "label": "Knob mode",   "type": "enum", "options": ["JUMP", "CATCH"], "default": 0, "panel": "SYS>THRU", "ram": {"addr": "0x24025E19", "t": "enum"}},
+    {"key": "pitch_out",    "label": "Pitch out",   "type": "num", "min": 1, "max": 1.1, "step": 0.001, "dp": 3, "fmt": "{v}x", "default": 1, "panel": "SYS>PITCH", "ram": {"addr": "0x24025DF8", "t": "f32"}},
+    {"key": "theme",        "label": "Theme",       "type": "info", "options": ["WARM", "COOL", "GOLDEN", "ROYAL"], "default": 0, "panel": "BOOT HOLD", "ram": {"addr": "0x24025D11", "t": "enum"}}
+  ],
+  "preset": [
+    {"key": "mod_out_a", "label": "Mod out A", "type": "enum", "options": ["MORPH", "TRIG", "ENV", "IN FOL", "OUT FOL", "S&H", "PITCH", "REC", "THRESH"], "default": 1, "panel": "ALT>A", "ram": {"addr": "0x24025B5C", "t": "enum"}},
+    {"key": "mod_out_b", "label": "Mod out B", "type": "enum", "options": ["MORPH", "TRIG", "ENV", "IN FOL", "OUT FOL", "S&H", "PITCH", "REC", "THRESH"], "default": 2, "panel": "ALT>B", "ram": {"addr": "0x24025B5D", "t": "enum"}},
+    {"key": "thru",      "label": "Thru",      "type": "enum", "options": ["OFF", "ON"], "default": 0, "panel": "THRU", "ram": {"addr": "0x24025B79", "t": "bool"}},
+    {"key": "latch",     "label": "Latch",     "type": "enum", "options": ["OFF", "ON"], "default": 0, "panel": "LATCH", "ram": {"addr": "0x24025B91", "t": "bool"}}
+  ],
+  "sound": [
+    {"key": "type",       "label": "Type",       "type": "enum", "options": ["SAMPLE", "LIVE"], "default": 0, "panel": "SND+SAMPLE", "ram": {"off": "0x945", "t": "enum"}},
+    {"key": "sync",       "label": "Sync",       "type": "enum", "options": ["OFF", "ON"], "default": 0, "panel": "ALT>SYNC", "ram": {"addr": "0x24025BC1", "t": "bool"}},
+    {"key": "link_rs",    "label": "Rate-Size",  "type": "enum", "options": ["OFF", "ON"], "default": 1, "panel": "R-S LINK", "ram": {"off": "0x53d", "t": "bool"}},
+    {"key": "link_sp",    "label": "Size-Pitch", "type": "enum", "options": ["OFF", "ON"], "default": 1, "panel": "S-P LINK", "ram": {"off": "0x525", "t": "bool"}},
+    {"key": "ping_pong",  "label": "Ping-pong",  "type": "enum", "options": ["OFF", "ON"], "default": 0, "panel": "HOLD REV", "ram": {"off": "0x92d", "t": "bool"}},
+    {"key": "fine_tune",  "label": "Fine tune",  "type": "num", "min": -7, "max": 7, "step": 0.1, "dp": 1, "fmt": "{v}st", "signed": true, "default": 0, "panel": "ALT>PITCH", "ram": {"off": "0x90c", "t": "f32"}},
+    {"key": "quantizer",  "label": "Quantizer",  "type": "quant", "default": {"notes": [false, false, false, false, false, false, false, false, false, false, false, false], "root": 0}, "panel": "ALT>QUANT", "ram": {"off": "0x554", "root": "0x56c", "t": "quant"}},
+    {"key": "quant_mode", "label": "Quant on",   "type": "enum", "options": ["ALL", "MOD"], "default": 0, "panel": "QNT>QUANT", "ram": {"off": "0x8f1", "t": "enum"}},
+    {"key": "choke",      "label": "Choke",      "type": "enum", "options": ["OFF", "ON"], "default": 0, "panel": "ALT:SND+LD", "ram": {"off": "0x95d", "t": "bool"}},
+    {"key": "gate",       "label": "Gate",       "type": "enum", "options": ["OFF", "ON"], "default": 0, "panel": "ALT:SND+SV", "ram": {"off": "0x975", "t": "bool"}}
+  ]
+}
