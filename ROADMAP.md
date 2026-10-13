@@ -189,7 +189,8 @@ web app over WiFi as an optional big-screen view.)
   A/B — plus **2 A/B scene LEDs** (same colour; lit=active scene) beside the A/B btn.
 - **Panel layout** (top→bottom): screen · [BACK | encoder] · [VIEW | FILE] ·
   [SOUND‹ | SOUND›] · [A/B btn | A/B LEDs].
-- **4 views** (VIEW button cycles + encoder pages): WAVE · PARM · MOD · SET.
+- **4 views** (VIEW button cycles + encoder pages): WAVE · PARAM · MOD · SETTINGS
+  (renamed from PARM / SET 2026-10-13 — the status line has room).
   Where-am-I = **status line at the bottom** (page dots + view name, Metropolix
   style) — the top tab strip was dropped 2026-10-12 to give content the space
   (Leo: keep for now; fallback idea = tabs shown briefly on VIEW/turn).
@@ -197,7 +198,7 @@ web app over WiFi as an optional big-screen view.)
   select; BACK = up a level; SOUND‹› & SCENE A/B are global (apply across views);
   FILE opens the SD browser overlay. No long-press / chords (keep it obvious).
 - **Role (decided 2026-10-12):** display + file/sound/preset browser. GRAINVIEW
-  never edits single params — the module's knobs do that; PARM/MOD are views.
+  never edits single params — the module's knobs do that; PARAM/MOD are views.
 - **Focus vs playback (decided 2026-10-11):** SOUND‹› moves *edit focus* only
   (`FUN_08011980`) — playing sound keeps going, so you can browse/load/tweak
   another sound silently. SET option **"Select also plays"** (default OFF) adds

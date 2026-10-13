@@ -3,7 +3,8 @@
 // 2026-10-12); ranges agree with the manual. Input = the knob value as stored
 // in the scene (0..1, SCAN/TONE -1..1), i.e. before CV/mod.
 // Context flags (ctx, from /state; addresses hardware-confirmed 2026-10-12):
-//   linkRS  RATE-SIZE link  -> RATE = overlap (1..8 grains) / grain length
+//   linkRS  RATE-SIZE link  -> RATE = overlap (1..8 grains) / grain length;
+//           unitText shows the overlap (x1.0..x8.0) - what the knob sets
 //   linkSP  SIZE-PITCH link -> grain length divided by the pitch ratio
 //   sync    RATE locked to the SYNC clock -> RATE = clock division x1/16..x16
 // Not handled: SIZE max-length modes beyond 4 s (mode byte 2/3: 8 s / buffer).
@@ -46,11 +47,13 @@ function unitText(k, v, ctx = {}) {
   const gms = () => units.grainMs(ctx.size ?? 0.5, ctx.pitch ?? 0.5, ctx.linkSP);
   switch (k) {
     case 'RATE':  if (ctx.sync) return 'SYN' + SYNC_TXT[units.syncIdx(v)];
-                  return fmtHz(ctx.linkRS ? units.rateLinkedHz(v, gms()) : units.rateHz(v)) + 'Hz';
+                  if (ctx.linkRS) return 'x' + (1 + 7 * clamp01(v)).toFixed(1);   // overlap
+                  return fmtHz(units.rateHz(v)) + 'Hz';
     case 'SIZE':  { const ms = ctx.linkSP ? gms() : units.sizeMs(v); return ms >= 1000 ? (ms / 1000).toFixed(2) + 's' : ms.toFixed(0) + 'ms'; }
     case 'PITCH': { const st = units.pitchSt(v), r = Math.round(st * 10) / 10; return (r > 0 ? '+' : '') + r.toFixed(Math.abs(r) >= 10 ? 0 : 1) + 'st'; }
     case 'SHAPE': return SHAPES[units.shapeIdx(v)];
-    case 'TONE':  { const t = units.tone(v); return t.type === 'FLAT' ? 'FLAT' : t.type + ' ' + fmtHz(t.hz); }
+    case 'TONE':  { const t = units.tone(v); if (t.type === 'FLAT') return 'FLAT';      // whole Hz / kHz: fits the cell
+                    return t.type + ' ' + (t.hz >= 999.5 ? Math.round(t.hz / 1000) + 'k' : Math.round(t.hz)); }
     case 'SCAN':  return fmtPct(v, true);
     default:      return fmtPct(v, false);   // START WRAP LEVEL BLUR MORPH
   }

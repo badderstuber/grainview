@@ -34,7 +34,17 @@ numbers live in PARM / the hero. Inspired by the Evil Pet + Tasty Chips GR-1 gra
 - **Placeholders:** `SCAN_STEP` (0.05 window/grain at full SCAN — map from the grain
   engine), sample length faked 2–10 s (`sampleSec`; real = WAV header, see preview spike),
   no REVERSE, `GRAIN_SPREAD` visual only, dot size / `WAVE_AMP` to judge on the OLED.
-- **Also:** emulator `?wave=A..D`, `?embed=1`, SET › Wave style; `gv_draw.js` `?zoom=N`;
+- **Links shown on PARM** (Leo: the panel's lit buttons show them, so not on WAVE; but PARM is
+  where you read numbers). PARM grid reordered (`PARM_ORDER`) so RATE · SIZE · PITCH share a
+  row (SIZE = hub of both links); a lit link = an 11x5 **chain icon** between the two labels
+  (tried inverted labels + dotted lines first — didn't read clearly). Hero of a derived value
+  (RATE under R›S, SYNC wins; SIZE under S›P) — tried chain + `LINKED` in the hero too,
+  Leo: PARAM only. Linked RATE shows the
+  **overlap** the knob sets (`x1.0`..`x8.0`, `gv_units.js`), not Hz. TONE text rounded to whole
+  Hz / kHz (`HP 425`, `LP 7k`) so it fits its cell. MOD keeps its row order. Mock has the
+  flags + `POST /mock_mode` (mock only) and R›S / S›P / SYNC buttons on the compare page.
+- **Views renamed** PARM → **PARAM**, SET → **SETTINGS** (status line has room).
+- **Also:** emulator `?wave=A..D`, `?embed=1`, SETTINGS › Wave style; `gv_draw.js` `?zoom=N`;
   mock knob sliders (emulator legend + compare page) drive `/param` like real knobs.
 
 ## Update 2026-10-12 (night, later) — WAV-preview spike ✅ (read file off SD → play on the laptop)
