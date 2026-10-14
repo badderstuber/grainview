@@ -23,6 +23,11 @@ API (all JSON):
     POST /load    {"index"[,"folder"]}        WAV -> selected sound (one halt; another
                                               folder = the sound switches folder, as ALT+folder)
 
+Pico USB screen (breadboard GRAINVIEW, pico/main.py; see gv_pico.py):
+    POST /frame   8192 raw bytes, 128x128 4-bit, 2 px/byte (left = high nibble) -> Pico
+    GET  /events  server-sent events: {"t":"enc","d":±n} / {"t":"btn","n":"BACK","down":true}
+    /state carries "pico": {"connected","port","frames"}. --pico off disables it.
+
 Usage:
     tools/venv/bin/python tools/grainview_server.py --mock
     tools/venv/bin/python tools/grainview_server.py          # live
@@ -31,6 +36,7 @@ Then open http://localhost:8745/
 import argparse
 import json
 import os
+import queue
 import random
 import sys
 import threading
@@ -621,7 +627,7 @@ STATIC = {
 }
 
 
-def make_handler(be):
+def make_handler(be, pico=None):
     page_path = os.path.join(HERE, "grainview_emulator.html")
 
     class H(BaseHTTPRequestHandler):
@@ -656,19 +662,51 @@ def make_handler(be):
                 with open(os.path.join(HERE, STATIC[path][0]), "rb") as f:
                     self._send(200, f.read(), STATIC[path][1])
             elif path == "/state":
-                self._send(200, be.snapshot())
+                self._send(200, {**be.snapshot(), "pico": pico.status() if pico else None})
+            elif path == "/events":
+                self._events()
             elif path == "/files":
                 q = dict(kv.split("=", 1) for kv in self.path.partition("?")[2].split("&") if "=" in kv)
                 self._run(lambda: be.file_list(folder_arg(q.get("folder"))))
             else:
                 self._send(404, {"ok": False, "error": "not found"})
 
+        def _events(self):
+            """Server-sent events: Pico key presses -> browser. One thread per open page."""
+            if pico is None:
+                return self._send(404, {"ok": False, "error": "Pico screen disabled"})
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            q = pico.subscribe()
+            try:
+                while True:
+                    try:
+                        msg = "data: " + json.dumps(q.get(timeout=15)) + "\n\n"
+                    except queue.Empty:
+                        msg = ": ping\n\n"          # keepalive; also detects a closed page
+                    self.wfile.write(msg.encode())
+                    self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            finally:
+                pico.unsubscribe(q)
+
         def do_POST(self):
+            if self.path == "/frame":
+                n = int(self.headers.get("Content-Length") or 0)
+                data = self.rfile.read(n)
+                if pico is None:
+                    return self._send(404, {"ok": False, "error": "Pico screen disabled"})
+                return self._run(lambda: pico.send_frame(data))
             try:
                 n = int(self.headers.get("Content-Length") or 0)
                 a = json.loads(self.rfile.read(n) or b"{}")
             except ValueError:
                 return self._send(400, {"ok": False, "error": "bad JSON"})
+            # every module-touching action, so a misbehaving module can be traced back
+            print(time.strftime("%H:%M:%S"), "POST", self.path, json.dumps(a), flush=True)
             routes = {
                 "/select": lambda: be.select(a.get("sound")),
                 "/scene": lambda: be.set_scene(a.get("scene")),
@@ -699,10 +737,19 @@ def main():
     ap.add_argument("--port", type=int, default=8745)
     ap.add_argument("--hz", type=float, default=5.0, help="SWD poll rate (live)")
     ap.add_argument("--freq", type=int, default=4_000_000, help="SWD clock Hz")
+    ap.add_argument("--pico", default="auto",
+                    help="Pico USB screen: auto (find + reconnect), a serial port, or off")
     a = ap.parse_args()
 
     be = MockBackend() if a.mock else SwdBackend(a.freq, a.hz)
-    httpd = ThreadingHTTPServer(("127.0.0.1", a.port), make_handler(be))
+    pico = None
+    if a.pico != "off":
+        try:
+            import gv_pico  # noqa: E402 - needs pyserial, only when the screen is wanted
+            pico = gv_pico.PicoLink(None if a.pico == "auto" else a.pico)
+        except ImportError as e:
+            print(f"Pico screen off ({e}); run with tools/venv/bin/python")
+    httpd = ThreadingHTTPServer(("127.0.0.1", a.port), make_handler(be, pico))
     print(f"GRAINVIEW ({be.mode}): http://localhost:{a.port}/")
     try:
         httpd.serve_forever()

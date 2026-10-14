@@ -9,6 +9,28 @@ _Last updated: 2026-10-13._
 
 ---
 
+## Update 2026-10-13 (night) — GRAINVIEW breadboard alive ✅
+
+- Hardware: **Pico 2 WH** (RP2350, MicroPython **v1.29.0** `RPI_PICO2_W`), **Adafruit 1.5"
+  SSD1327** OLED (ships I2C — **J1 + J2 cut** for SPI), bare EC11 encoder from the unbuilt O&C
+  kit, 7 tactile buttons. Pin map: `docs/PINMAP.md`. Wiring guide (artifact):
+  https://claude.ai/artifact/MB6Wmh7Vq8oF1sdqTKvxGM
+- **All tested OK:** screen (correct orientation with segment remap 0x51, 16-step grey ramp),
+  encoder turn + push, all 7 buttons. Power = Mac USB only.
+- Code in `pico/`: `pins.py` (pin constants), `ssd1327.py` (SPI driver, GS4_HMSB framebuf),
+  `hwtest.py` (screen + input test), `enc_raw.py` (raw A/B diagnostic).
+  Run: `~/Library/Python/3.9/bin/mpremote cp pico/ssd1327.py pico/pins.py :` then
+  `mpremote run pico/hwtest.py`.
+- Gotchas hit: screen black until J1/J2 cut; encoder dead until its C (common) leg grounded.
+- **USB screen mirror working** (same night): `pico/main.py` autostarts, shows the emulator's
+  frames and sends keys back. Server forwards via `POST /frame` + `GET /events` (SSE), link in
+  `tools/gv_pico.py` (auto-finds VID 2E8A, reconnects). Emulator: `mirror()` after each render,
+  Pico keys → `enc()/push()/btn()`. Measured ~22 fps full-screen, ~120 fps for a 20-row band.
+  Server must run under `tools/venv/bin/python` (pyserial). Update Pico code:
+  `tools/venv/bin/python tools/gv_pico.py deploy`. Stuck Pico: hold BACK while plugging in.
+- **Real-panel verdict (Leo):** "looks perfect, super sharp and easy to read" — the Spleen
+  font set + layout hold up on the actual 1.5" OLED, no changes needed.
+
 ## Update 2026-10-13 (evening) — Settings.mgs mapped offline (Ghidra) ✅ (hardware check pending)
 
 - Load `FUN_080277ac` / save `FUN_080225a4` / deserialiser `FUN_0802695c` / serialiser
