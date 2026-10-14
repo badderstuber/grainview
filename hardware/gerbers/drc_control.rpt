@@ -1,0 +1,22 @@
+** Drc report for grainview_control.kicad_pcb **
+** Created on 2026-10-14T14:43:37 **
+** Report includes: Errors **
+
+** Found 1 DRC violations **
+[starved_thermal]: Thermal relief connection to zone incomplete (layer F.Cu; zone min spoke count 2; actual 1)
+    Local override; error
+    @(1.1500 mm, 10.4500 mm): Zone [GND] on F.Cu, priority 0
+    @(36.8000 mm, 76.0000 mm): PTH pad 1 [GND] of J6
+
+** Found 0 unconnected pads **
+
+** Found 0 Footprint errors **
+
+** Ignored checks **
+    - Footprint has no courtyard defined
+    - Track endpoint not centered on via
+    - Tuning profile track geometries
+    - Footprint doesn't match symbol's footprint filters
+    - Footprint component type doesn't match footprint pads
+
+** End of Report **
