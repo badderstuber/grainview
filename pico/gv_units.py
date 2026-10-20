@@ -5,6 +5,7 @@ import math
 
 FS = 48076                                    # engine sample rate (Hz)
 SHAPES = ("BELL", "SINC", "TRI", "DECAY", "RAMP", "TUKEY", "SQUARE")
+SYNC_MULT = (0.0625, 0.125, 0.25, 0.5, 1, 2, 4, 8, 16)
 SYNC_TXT = ("/16", "/8", "/4", "/2", "x1", "x2", "x4", "x8", "x16")
 
 
@@ -32,6 +33,13 @@ def pitch_st(v):
 
 def grain_ms(size, pitch, link_sp):
     return size_ms(size) / (2 ** (pitch_st(pitch) / 12) if link_sp else 1)
+
+
+def rate_linked_hz(rate, gms):               # RATE-SIZE link: overlap / grain length
+    hz = (1 + 7 * clamp01(rate)) / (gms / 1000)
+    while hz > 130.813:
+        hz /= 2
+    return hz
 
 
 def sync_idx(v):

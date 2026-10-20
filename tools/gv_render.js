@@ -3,17 +3,20 @@
 // the browser bits stubbed out, sets the snapshot, draws one view.
 //
 //   node tools/gv_render.js SNAP.json VIEW > frame.bin    (8192 bytes, left px = high nibble)
+// A snapshot with "_steps" (clock values, ms) + "_rand" (random numbers) renders once per
+// step with those (grain dots), the last frame is the output - as pico/gv_ui.py does.
 // Used by: tools/venv/bin/python tools/gv_pico.py ui VIEW
 const fs = require('fs'), path = require('path'), vm = require('vm');
 const [snapPath, view] = process.argv.slice(2);
 const dir = __dirname;
+let clock = 0;
 
 const el = () => ({style: {}, textContent: '', children: [], hidden: false, width: 0, height: 0,
   addEventListener() {}, append() {}, classList: {add() {}},
   getContext: () => ({fillRect() {}, set fillStyle(v) {}})});
 const ctx = vm.createContext({
   document: {getElementById: el, addEventListener() {}, body: el(), createElement: el, activeElement: null},
-  localStorage: {}, location: {search: ''}, devicePixelRatio: 1, performance: {now: () => 0},
+  localStorage: {}, location: {search: ''}, devicePixelRatio: 1, performance: {now: () => clock},
   fetch: () => new Promise(() => {}), setTimeout() {}, setInterval() {},
   EventSource: class { constructor() {} }, URLSearchParams, console,
 });
@@ -30,9 +33,11 @@ G.M = snap;
 if (snap.connected) { G.st.sound = snap.selected; G.st.scene = snap.edit_scene || 'A'; }
 else if (snap._sound != null) G.st.sound = snap._sound;    // test: the last sound polled
 G.st.view = view;
-const b = G.fb();
 if (!G.views[view]) throw new Error('view not ported: ' + view);
-G.views[view](b);
+const rand = (snap._rand || []).slice();
+vm.runInContext('Math.random = () => __next()', Object.assign(ctx, {__next: () => rand.shift()}));
+let b;
+for (const t of snap._steps || [0]) { clock = t; b = G.fb(); G.views[view](b); }
 if (!snap.connected) G.box(b, 'NO MODULE LINK');
 const out = Buffer.alloc(b.p.length / 2);
 for (let j = 0; j < out.length; j++) out[j] = (b.p[2 * j] << 4) | b.p[2 * j + 1];

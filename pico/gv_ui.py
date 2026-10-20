@@ -1,18 +1,27 @@
 # GRAINVIEW UI on the Pico, drawn from its own poll (mgpoll.py). A port of the emulator
 # (tools/grainview_emulator.html, the spec): same layout maths, same fonts, so the frames
 # match pixel for pixel - check with: tools/venv/bin/python tools/gv_pico.py ui PARAM
-# Ported so far: header, status line, WAVE (static: no grain dots yet), PARAM, MOD, the
-# NO MODULE LINK / flash boxes. SETTINGS, FILE, SETUP and the knob hero: still Mac-only.
+# Ported so far: header, status line, WAVE (waveform + animated grain dots, style B),
+# PARAM, MOD, the NO MODULE LINK / flash boxes. SETTINGS, FILE, SETUP and the knob hero:
+# still Mac-only.
 #
 #   ui = UI()
 #   ui.render(snap)                     # into ui.buf (128x128 GS4, the SSD1327's layout)
+#   ui.update(snap)                     # new data only; the next animate() draws it
+#   ui.animate()                        # WAVE: next grain frame (~30 fps) -> the rows it
+#                                       # changed (r0, n), or None
 #   act = ui.btn("SOUND>")              # -> None or ("select", n) for main.py to do
+# A snapshot with "_steps" (clock values, ms) + "_rand" (random numbers) renders once per
+# step with those - the same script the emulator runs in tools/gv_render.js (tests).
 import framebuf
 import math
+import micropython
+import random
 import time
 
 from gv_draw import FONT, H, W, Draw, fit
-from gv_units import jround, unit_text
+from gv_units import (SYNC_MULT, grain_ms, jround, pitch_st, rate_hz, rate_linked_hz,
+                      shape_idx, sync_idx, unit_text)
 
 VIEWS = ("WAVE", "PARAM", "MOD", "SETTINGS")
 PORTED = ("WAVE", "PARAM", "MOD")
@@ -28,6 +37,9 @@ CHAIN = (".###...###.",                       # 11x5: two links + bar
          ".###...###.")
 WAVE_AMP = 0.35
 FLASH_MS = 1100
+# grain dots (the emulator's grainsStep / grains, see its notes): simulated from the
+# knobs, one dot per live grain. SCAN_STEP + the sample length are placeholders there too.
+GRAIN_MIN_MS, GRAIN_MAX, GRAIN_PX, GRAIN_SPREAD, SCAN_STEP = 80, 160, 2, 0.02, 0.05
 
 
 def fmt(v, bip):                              # normalized: unipolar .42, bipolar +.42
@@ -43,6 +55,67 @@ def seed_of(s):
     for ch in s or "":
         h = (h * 31 + ord(ch)) & 0xFFFFFFFF
     return 1 + h % 9
+
+
+@micropython.viper
+def dot(buf, gx: int, gy: int, v: int):
+    """A GRAIN_PX (2x2) dot of grey v at gx, gy, straight into the GS4 buffer (left pixel
+    = high nibble); a pixel that's already >= 8 (the bright wave) goes black instead."""
+    p = ptr8(buf)
+    for j in range(2):
+        y = gy + j
+        if y < 0 or y >= 128:
+            continue
+        for i in range(2):
+            x = gx + i
+            if x < 0 or x >= 128:
+                continue
+            k = y * 64 + (x >> 1)
+            b = int(p[k])
+            if x & 1:
+                p[k] = (b & 0xF0) | (0 if (b & 15) >= 8 else v)
+            else:
+                p[k] = (b & 0x0F) | ((0 if (b >> 4) >= 8 else v) << 4)
+
+
+@micropython.viper
+def vdots(buf, x: int, y: int, h: int, v: int):
+    """Every other pixel of column x, rows y..y+h-1 (the scan playhead)."""
+    if x < 0 or x >= 128:
+        return
+    p = ptr8(buf)
+    sh = 0 if x & 1 else 4
+    keep = 0xF0 if x & 1 else 0x0F
+    yy = y
+    while yy < y + h:
+        if yy >= 0 and yy < 128:
+            k = yy * 64 + (x >> 1)
+            p[k] = (int(p[k]) & keep) | (v << sh)
+        yy += 2
+
+
+def band(h):                                  # max half-height of the wave band
+    return jround(((h >> 1) - 1) * WAVE_AMP)
+
+
+# SHAPE windows over a grain's life t 0..1 (the emulator's shapeEnv), in SHAPES order
+def _bell(t):
+    return math.exp(-0.5 * ((t - 0.5) / 0.17) ** 2)
+
+
+def _sinc(t):
+    x = (t - 0.5) * 4 * math.pi
+    return abs(math.sin(x) / x) if x else 1
+
+
+def _tukey(t):
+    if t < 0.2:
+        return 0.5 - 0.5 * math.cos(math.pi * t / 0.2)
+    return 0.5 - 0.5 * math.cos(math.pi * (1 - t) / 0.2) if t > 0.8 else 1
+
+
+ENVS = (_bell, _sinc, lambda t: 1 - abs(2 * t - 1), lambda t: (1 - t) ** 2, lambda t: t,
+        _tukey, lambda t: 1)                  # BELL SINC TRI DECAY RAMP TUKEY SQUARE
 
 
 def make_wave(n, seed):                       # synthetic until the WAV is read (as the emulator)
@@ -68,6 +141,10 @@ class UI:
         self.snap = None
         self.flash_msg, self.flash_until = None, 0
         self.wave_key = self.wave = None      # cached synthetic waveform
+        self.bg = bytearray(len(self.buf))    # WAVE without playhead + dots (animate() base)
+        self.bg_key = self.box_ = None        # what bg shows / the wave box (x, y, w, h)
+        self.clock, self.rand = time.ticks_ms, random.random
+        self.g_list, self.g_acc, self.g_t, self.g_key, self.g_ph = [], 0, None, None, 0
 
     # ---- data ----
     def snd(self):
@@ -145,35 +222,112 @@ class UI:
 
     # ---- views ----
     def v_wave(self):
-        d, M = self.d, self.M
-        top = self.header()
-        pl = self.snap.get("playing") if self.snap and self.snap.get("connected") else None
-        bot = self.status("WAVE", "PLAY S%s" % (pl + 1 if pl is not None else "-"), 10)
-        s, h = self.snd(), 0
-        h = bot - top - 2
-        if s and s["file"]:
-            p = s[self.scene]
-            s0 = p["START"]
-            self.draw_wave(1, top, W - 2, h, seed_of(s["file"]), s0, min(1, s0 + p["WRAP"]), s0)
+        """The static part (into bg, redrawn only when it changes); wave_live() adds the
+        scan playhead + grain dots on top, every frame."""
+        d, M, s, snap = self.d, self.M, self.snd(), self.snap
+        pl = snap.get("playing") if snap and snap.get("connected") else None
+        p = s[self.scene] if s else None
+        key = (self.sound, self.scene, pl, s and s["file"], p and p["START"], p and p["WRAP"])
+        if key != self.bg_key:
+            self.fb.fill(0)
+            top = self.header()
+            bot = self.status("WAVE", "PLAY S%s" % (pl + 1 if pl is not None else "-"), 10)
+            h = bot - top - 2
+            self.box_ = None
+            if s and s["file"]:
+                s0 = p["START"]
+                self.box_ = (1, top, W - 2, h)
+                self.draw_wave(1, top, W - 2, h, seed_of(s["file"]), s0, min(1, s0 + p["WRAP"]))
+            else:
+                d.text(M, "no sample", (W - M.width("no sample")) >> 1, top + (h >> 1) + (M.cap >> 1), 5)
+            self.bg[:] = self.buf
+            self.bg_key = key
         else:
-            d.text(M, "no sample", (W - M.width("no sample")) >> 1, top + (h >> 1) + (M.cap >> 1), 5)
+            self.buf[:] = self.bg
+        self.wave_live(self.clock())
 
-    def draw_wave(self, x, y, w, h, seed, s, e, sc):
-        """Waveform band, window START..START+WRAP bright, scan playhead dotted."""
+    def draw_wave(self, x, y, w, h, seed, s, e):
+        """Waveform band, window START..START+WRAP bright, START / WRAP markers."""
         d = self.d
         if self.wave_key != (w, seed):
             self.wave_key, self.wave = (w, seed), make_wave(w, seed)
-        mid, band = y + (h >> 1), jround(((h >> 1) - 1) * WAVE_AMP)
+        mid, bd = y + (h >> 1), band(h)
         for i, v in enumerate(self.wave):
-            amp, win = jround(v * band), s <= i / w <= e
+            amp, win = jround(v * bd), s <= i / w <= e
             d.rect(x + i, mid - amp, 1, amp * 2 + 1, 9 if win else 3)
             d.px(x + i, mid - amp, 15 if win else 7)
             d.px(x + i, mid + amp, 15 if win else 7)
         for v in (s, e):
             d.rect(x + jround(v * (w - 1)), y, 1, h, 15)
-        sx = x + jround(sc * (w - 1))
-        for yy in range(y, y + h, 2):
-            d.px(sx, yy, 12)
+
+    def wave_live(self, now):
+        self.grains_step(now)
+        if self.box_ is None:
+            return
+        x, y, w, h = self.box_
+        vdots(self.buf, x + jround(self.scan_pos() * (w - 1)), y, h, 12)   # scan playhead
+        self.grains(x, y, w, h, now)
+
+    # ---- grain dots ----
+    def scan_pos(self):                       # playhead, 0..1 of the sample
+        s = self.snd()
+        p = s[self.scene] if s else None
+        s0 = p["START"] if p else 0
+        e = min(1, s0 + (p["WRAP"] if p else 0))
+        return s0 + self.g_ph * (e - s0)
+
+    def grain_rate(self, s, p, gms):          # grains launched per second
+        snap = self.snap
+        if snap.get("sync") == 1 and snap.get("clock_period"):
+            return SYNC_MULT[sync_idx(p["RATE"])] / snap["clock_period"]
+        return rate_linked_hz(p["RATE"], gms) if s["link_rs"] == 1 else rate_hz(p["RATE"])
+
+    def grains_step(self, now):
+        s, snap = self.snd(), self.snap
+        dt = min(0.1, (time.ticks_diff(now, self.g_t) if self.g_t is not None else 0) / 1000)
+        self.g_t = now
+        key = (self.sound, s and s["file"])
+        if key != self.g_key:
+            self.g_key, self.g_list, self.g_acc, self.g_ph = key, [], 0, 0
+        td = time.ticks_diff
+        self.g_list = [g for g in self.g_list if td(now, g[2]) < g[3]]
+        if not (s and s["file"] and snap and snap.get("connected") and snap.get("playing") == self.sound):
+            self.g_acc = 0
+            return
+        p = s[self.scene]
+        gms = grain_ms(p["SIZE"], p["PITCH"], s["link_sp"] == 1)
+        life = max(GRAIN_MIN_MS, gms)
+        dist = gms / 1000 * 2 ** (pitch_st(p["PITCH"]) / 12) / (1 + seed_of(s["file"]))
+        self.g_acc = min(self.g_acc + dt * self.grain_rate(s, p, gms), GRAIN_MAX)
+        while self.g_acc >= 1:
+            x = self.scan_pos() + (self.rand() - 0.5) * GRAIN_SPREAD
+            self.g_list.append((x, self.rand(), now, life, gms, dist))
+            self.g_ph = ((self.g_ph + p["SCAN"] * SCAN_STEP) % 1 + 1) % 1
+            self.g_acc -= 1
+        if len(self.g_list) > GRAIN_MAX:      # oldest go first
+            del self.g_list[:len(self.g_list) - GRAIN_MAX]
+
+    @micropython.native
+    def grains(self, x, y, w, h, now):
+        """Dots above / below the band; one that lands on the bright wave is cut out.
+        (Hot loop: rounding inlined as int(v + 0.5) - every value here is >= 0.)"""
+        p, buf = self.snd()[self.scene], self.buf
+        env = ENVS[shape_idx(p["SHAPE"])]
+        k15 = 15 * math.sqrt(min(1, max(0, p["LEVEL"])))
+        mid, gap = y + (h >> 1), band(h) + 2
+        zone = max(0, (h >> 1) - gap - GRAIN_PX)
+        up, dn, span, td = mid - gap - GRAIN_PX, mid + gap, w - GRAIN_PX, time.ticks_diff
+        for gx0, gy0, t0, life, gms, dist in self.g_list:
+            age = td(now, t0)
+            v = int(k15 * env(age / life) + 0.5)
+            if v < 1:
+                continue
+            f = age / gms
+            xf = gx0 + dist * (f if f < 1 else 1)
+            xf = 0 if xf < 0 else 1 if xf > 1 else xf
+            dot(buf, x + int(xf * span + 0.5),
+                up - int(gy0 * 2 * zone + 0.5) if gy0 < 0.5 else dn + int((gy0 - 0.5) * 2 * zone + 0.5),
+                v)
 
     def v_param(self):
         d, T, M = self.d, self.T, self.M
@@ -230,23 +384,66 @@ class UI:
 
     # ---- render / input ----
     def render(self, snap):
+        if snap and snap.get("_steps"):
+            return self.render_scripted(snap)
+        self.update(snap)
+        if self.view == "WAVE":
+            self.v_wave()
+        else:
+            self.bg_key = None
+            self.fb.fill(0)
+            if self.view == "PARAM":
+                self.v_param()
+            elif self.view == "MOD":
+                self.v_mod()
+            else:
+                self.v_todo()
+        self.overlays()
+
+    def update(self, snap):
         self.snap = snap
         if snap and snap.get("connected"):
             self.sound = snap["selected"] if 0 <= snap["selected"] < 8 else self.sound
             self.scene = snap.get("edit_scene") or self.scene
-        self.fb.fill(0)
-        if self.view == "WAVE":
-            self.v_wave()
-        elif self.view == "PARAM":
-            self.v_param()
-        elif self.view == "MOD":
-            self.v_mod()
-        else:
-            self.v_todo()
+
+    def overlays(self):
+        snap = self.snap
         if self.flash_msg and time.ticks_diff(self.flash_until, time.ticks_ms()) > 0:
             self.box(self.flash_msg)
         elif not (snap and snap.get("connected")):
             self.box("NO MODULE LINK")
+
+    def animating(self):
+        """WAVE with dots alive or being launched (else frames wouldn't change)."""
+        s, snap = self.snd(), self.snap
+        return (self.view == "WAVE" and self.bg_key is not None
+                and (bool(self.g_list) or bool(s and s["file"] and snap.get("playing") == self.sound)))
+
+    def animate(self):
+        if not self.animating():
+            return None
+        key = self.bg_key
+        self.v_wave()                         # bg (redrawn if update() changed it) + live
+        self.overlays()                       # (the flash box sits inside the wave box)
+        b = self.box_
+        return (b[1], b[3]) if b and self.bg_key == key else (0, H)
+
+    def render_scripted(self, snap):
+        """Tests: one render per snap["_steps"] clock value, randoms from snap["_rand"]."""
+        r = list(snap.get("_rand", ()))
+        clock, rand = self.clock, self.rand
+        self.rand = lambda: r.pop(0)
+        self.g_list, self.g_acc, self.g_t, self.g_key, self.g_ph = [], 0, None, None, 0
+        self.bg_key = None
+        live = {k: v for k, v in snap.items() if k != "_steps"}
+        try:
+            for t in snap["_steps"]:
+                self.clock = lambda: t
+                self.render(live)
+        finally:
+            self.clock, self.rand = clock, rand
+            self.g_list, self.g_acc, self.g_t, self.g_key, self.g_ph = [], 0, None, None, 0
+            self.bg_key = None
 
     def flash(self, msg):
         self.flash_msg, self.flash_until = msg, time.ticks_add(time.ticks_ms(), FLASH_MS)

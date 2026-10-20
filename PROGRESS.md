@@ -9,6 +9,35 @@ _Last updated: 2026-10-20 (late)._
 
 ---
 
+## Update 2026-10-20 (night, last) — WAVE grain dots animate on the Pico ✅
+
+- **Grain dots ported** (the emulator's grainsStep / grains / shapeEnv): launched from the
+  scan playhead at the RATE (free / RATE-SIZE linked / SYNC), live SIZE (min 80 ms), fade
+  with the SHAPE window x LEVEL, travel through the sample, cut out on the bright wave; the
+  dotted playhead moves with SCAN. Only the playing sound makes grains.
+- **Parity incl. animation:** test snapshots can script the clock (`_steps`) + randoms
+  (`_rand`); the Pico and `tools/gv_render.js` run the same simulation → `gv_pico.py ui
+  --cases` now 20 cases x 3 views = **60 frames MATCH** (7 shapes, linked/free/sync rates,
+  busy scan, the 160-dot cap...). Test renders always start the dots afresh.
+- **Speed: ~27 fps standalone** (`P` op = on-device timing: `fps`, `anim_ms` 12.8,
+  `push_ms` 8.3, `poll_ms`, `gc_ms`, `max_gap_ms`). How:
+  - WAVE's static part (header, status, waveform) is drawn into a background buffer only
+    when it changes; a frame = copy it + playhead + dots, then push just the wave box rows.
+  - dots via a `viper` writer straight into the GS4 buffer; the grain loop is
+    `@micropython.native` with inlined rounding (99 µs/grain from 153).
+  - the Pico's own poll reads **only the selected sound** + globals (`read(focus=True)`,
+    ~15 ms vs 45); full polls whenever the Mac reads `S` (and for 1 s after).
+  - a poll hands its data to the next frame (no extra redraw), absolute 33 ms cadence.
+  - `gc.collect()` only at a poll and only below 120 KB free (it costs ~17 ms; the boxed
+    floats make ~300 KB/s of garbage).
+- **Heap fixes on the way:** `S` / `v` replies go out as pieces (no 15 KB block), test
+  snapshots are parsed in place (view in `"_view"`), per-sound settings versions (focused /
+  full polls alternating no longer re-decode all 8 sounds).
+- With the Mac reading `S` at 5 Hz it drops to ~17 fps (full poll + 15 KB reply ≈ 60 ms) -
+  fine, that's when the emulator owns the screen anyway. If ever needed: overclock
+  (`machine.freq`, before SPI/PIO are set up) or the poll on core 1.
+- Next: knob-touch hero / readout (style B's status-line "SIZE 507ms"), SETTINGS view.
+
 ## Update 2026-10-20 (later still) — GRAINVIEW draws its own UI ✅ (first views)
 
 - **The Pico renders the UI itself** from its own poll whenever the Mac isn't sending frames

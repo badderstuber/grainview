@@ -5,7 +5,10 @@
 #
 #   p = Poller(swd)       # a connected swd.SWD
 #   snap = p.read()       # dict, same keys as /state (+ "pico_ms": poll time)
-#   p.json()              # the last snapshot as JSON bytes
+#   p.read(focus=True)    # only the selected sound (+ globals): the Pico UI's poll, ~1/4
+#                         # of the time; the other sounds keep their last values
+#   p.json()              # the last snapshot as JSON: a list of bytes pieces, to write one
+#                         # after the other (no 15 KB block from a busy heap)
 # Most of the state sits still between polls, so a sound (and the settings) is only
 # decoded + JSON-encoded again when its raw bytes change.
 import json
@@ -87,10 +90,10 @@ def s_addr(row, n, i=4):
     return row[3] if row[3] is not None else base(n) + row[i]
 
 
-def s_wants():
+def s_wants(sounds):
     w = []
     for row in M.SETTINGS:
-        for n in range(8) if row[0] == "sound" else (None,):
+        for n in sounds if row[0] == "sound" else (None,):
             w.append((s_addr(row, n), RAM_SIZE[row[2]]))
             if row[2] == "quant":
                 w.append((s_addr(row, n, 5), 4))
@@ -117,52 +120,82 @@ def s_decode(row, sp, n):
     return None
 
 
+GLOBALS = ((M.CUR_SOUND, 1), (M.PLAYING, 4), (M.EDIT_SCENE, 1), (M.MORPH, 4),
+           (M.SD_STATE, 4), (M.SIZE_MODE, 1), (M.SYNC, 1), (M.CLOCK_PERIOD, 4),
+           (M.CUR_PROJECT, 1), (M.CUR_PRESET, 1), (M.PROJECT_EXISTS, 8),
+           (M.PRESET_EXISTS, 8), (M.PRESET_LOCKED, 8)) + tuple((a, 4) for _, a in M.LIVE)
+ALL = tuple(range(8))
+
+
 class Poller:
     def __init__(self, s):
         self.s = s
-        self.st, self.st_ms, self.st_raw, self.st_ver = None, 0, None, 0
+        self.st, self.st_ms, self.st_for = None, 0, None
+        self.st_graw = None                   # module / preset settings: raw bytes last decoded
+        self.st_sraw = [None] * 8             # per sound: raw bytes + a version for its cache key
+        self.st_sver = [0] * 8
         self.cache = [None] * 8               # per sound: (raw key, dict, JSON)
         self.snap = self.js = None
-        self.s_spans = merge(s_wants())
-        w = [(M.CUR_SOUND, 1), (M.PLAYING, 4), (M.EDIT_SCENE, 1), (M.MORPH, 4),
-             (M.SD_STATE, 4), (M.SIZE_MODE, 1), (M.SYNC, 1), (M.CLOCK_PERIOD, 4),
-             (M.CUR_PROJECT, 1), (M.CUR_PRESET, 1), (M.PROJECT_EXISTS, 8),
-             (M.PRESET_EXISTS, 8), (M.PRESET_LOCKED, 8)] + [(a, 4) for _, a in M.LIVE]
-        for n in range(8):
-            b = base(n)
-            w += [(b + M.BLOCK_LO, NBLK), (b + M.SRC_OFF, 1), (b + M.LINK_RS, 1), (b + M.LINK_SP, 1)]
-        self.spans = merge(w)
+        self.spans, self.s_spans = {}, {}     # merged reads per set of sounds
 
-    def settings(self):
-        sp = Spans(self.s, self.s_spans)
-        raw = tuple(b for _, b in sp.blocks)
-        if raw == self.st_raw:
-            return self.st
-        self.st_raw, self.st_ver = raw, self.st_ver + 1
-        out = {"module": {}, "preset": {}, "sounds": [{} for _ in range(8)]}
-        for row in M.SETTINGS:
-            if row[0] == "sound":
-                for n in range(8):
-                    out["sounds"][n][row[1]] = s_decode(row, sp, n)
-            else:
-                out[row[0]][row[1]] = s_decode(row, sp, None)
-        return out
+    def spans_for(self, sounds):
+        sp = self.spans.get(sounds)
+        if sp is None:
+            w = list(GLOBALS)
+            for n in sounds:
+                b = base(n)
+                w += [(b + M.BLOCK_LO, NBLK), (b + M.SRC_OFF, 1), (b + M.LINK_RS, 1),
+                      (b + M.LINK_SP, 1)]
+            sp = self.spans[sounds] = merge(w)
+        return sp
 
-    def read(self):
+    def settings(self, sounds):
+        """Re-read the settings of these sounds (+ module / preset); a group is decoded
+        again only when its own bytes changed."""
+        ss = self.s_spans.get(sounds)
+        if ss is None:
+            ss = self.s_spans[sounds] = merge(s_wants(sounds))
+        sp = Spans(self.s, ss)
+        st = self.st or {"module": {}, "preset": {}, "sounds": [{} for _ in range(8)]}
+        glob = [r for r in M.SETTINGS if r[0] != "sound"]
+        raw = tuple(sp.get(a, n) for a, n in s_wants(()))
+        if raw != self.st_graw:
+            self.st_graw = raw
+            st = {"module": {}, "preset": {}, "sounds": st["sounds"]}
+            for row in glob:
+                st[row[0]][row[1]] = s_decode(row, sp, None)
+        for n in sounds:
+            raw = tuple(sp.get(a, k) for a, k in s_wants((n,)))
+            if raw != self.st_sraw[n]:
+                self.st_sraw[n], self.st_sver[n] = raw, self.st_sver[n] + 1
+                st["sounds"][n] = {row[1]: s_decode(row, sp, n)
+                                   for row in M.SETTINGS if row[0] == "sound"}
+        return st
+
+    def read(self, focus=False):
         t0 = time.ticks_ms()
-        if self.st is None or time.ticks_diff(t0, self.st_ms) >= M.SETTINGS_EVERY_MS:
-            self.st, self.st_ms = self.settings(), t0
-        sp = Spans(self.s, self.spans)
-        folders = [sp.u8(base(n) + M.SRC_OFF) for n in range(8)]
+        sounds = ALL
+        if focus and None not in self.cache:
+            sel = self.s.read_block8(M.CUR_SOUND, 1)[0]
+            if sel < 8:
+                sounds = (sel,)
+        if (self.st is None or sounds != self.st_for
+                or time.ticks_diff(t0, self.st_ms) >= M.SETTINGS_EVERY_MS):
+            self.st, self.st_ms, self.st_for = self.settings(sounds), t0, sounds
+        sp = Spans(self.s, self.spans_for(sounds))
+        folders = {n: sp.u8(base(n) + M.SRC_OFF) for n in sounds}
         w = []
-        for n, f in enumerate(folders):           # file name + cursor follow the folder
+        for n, f in folders.items():          # file name + cursor follow the folder
             if f in M.FNAME_OFF:
                 w += [(base(n) + M.FNAME_OFF[f], NAME_PEEK), (M.CURSORS + (f * 8 + n) * 4, 4)]
         sp2 = Spans(self.s, merge(w))
         sync = sp.u8(M.SYNC)
-        sounds = []
-        for n, folder in enumerate(folders):
-            b = base(n)
+        out = []
+        for n in range(8):
+            if n not in folders:              # not read this time: as last read
+                out.append(self.cache[n][1])
+                continue
+            folder, b = folders[n], base(n)
             known = folder in M.FNAME_OFF
             fname = cur = None
             if known:
@@ -171,12 +204,12 @@ class Poller:
                     fname = self.s.read_block8(b + M.FNAME_OFF[folder], 0x100)
                 cur = sp2.get(M.CURSORS + (folder * 8 + n) * 4, 4)
             key = (sp.get(b + M.BLOCK_LO, NBLK), folder, fname, cur,
-                   sp.u8(b + M.LINK_RS), sp.u8(b + M.LINK_SP), self.st_ver, sync)
+                   sp.u8(b + M.LINK_RS), sp.u8(b + M.LINK_SP), self.st_sver[n], sync)
             c = self.cache[n]
             if c is None or c[0] != key:
                 snd = self.sound(n, key)
                 c = self.cache[n] = (key, snd, json.dumps(snd).encode())
-            sounds.append(c[1])
+            out.append(c[1])
         cp = sp.u8(M.CUR_PRESET)
         self.snap = {
             "mode": "swd", "connected": True, "error": None,
@@ -191,19 +224,21 @@ class Poller:
             "store": {"project": sp.u8(M.CUR_PROJECT), "projects": sp.bitmap(M.PROJECT_EXISTS),
                       "presets": sp.bitmap(M.PRESET_EXISTS), "locked": sp.bitmap(M.PRESET_LOCKED),
                       "preset": cp if cp < M.SLOTS else None},
-            "sounds": sounds,
+            "sounds": out,
             "pico_ms": time.ticks_diff(time.ticks_ms(), t0),
         }
         self.js = None
         return self.snap
 
     def json(self):
-        """The last snapshot as JSON bytes, spliced from the cached per-sound JSON."""
+        """The last snapshot as JSON pieces, spliced from the cached per-sound JSON."""
         if self.js is None:
             top = dict(self.snap)
             del top["sounds"]
-            self.js = b"".join((b'{"sounds": [', b", ".join(c[2] for c in self.cache), b"], ",
-                                json.dumps(top)[1:].encode()))
+            parts = [b'{"sounds": [']
+            for i, c in enumerate(self.cache):
+                parts += (b", ", c[2]) if i else (c[2],)
+            self.js = parts + [b"], ", json.dumps(top)[1:].encode()]
         return self.js
 
     def sound(self, n, key):

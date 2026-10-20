@@ -19,6 +19,7 @@
 # Ctrl-C is disabled while running (frames are binary). Escape hatch: hold BACK while
 # plugging in and it stops before taking over, leaving the REPL free.
 import array
+import gc
 import json
 import machine
 import micropython
@@ -83,10 +84,13 @@ def read_into(mv):
 
 # --- SWD (to the Multigrain through J3 -> JTRACE) + the Pico's own poll ---
 POLL_MS, RETRY_MS, FRESH_MS = 200, 2000, 100
+GC_FREE = 120_000                             # collect (at a poll, not mid-frame) below this
 VTREF_MIN = 49648                             # ADC counts for 2.5 V
 WRITES = (0x77, 0x62, 0x68, 0x75, 0x69, 0x47)  # w b h u i G: the next 'S' polls afresh
 dbg = [None]                                  # the SWD object
-mg = {"poll": None, "auto": True, "stale": True, "err": "connecting", "at": 0, "next": 0}
+mg = {"poll": None, "auto": True, "stale": True, "err": "connecting", "at": 0, "next": 0,
+      "full_at": None,                        # last poll of all 8 sounds (else: the focused one)
+      "mac_at": None}                         # last 'S': while the Mac reads, poll all 8
 vtref = machine.ADC(pins.VTREF)
 
 def mg_link(khz=8000):
@@ -103,28 +107,41 @@ def mg_link(khz=8000):
         mg["poll"] = Poller(s)
     return dpidr
 
-def mg_poll():
-    """Poll the Multigrain now. A failure is kept for 'S' and retried after RETRY_MS."""
+def mg_poll(full=False):
+    """Poll the Multigrain now: all 8 sounds for the Mac ('S'), else just the selected one
+    (all our UI shows; ~1/4 the time, so WAVE's animation doesn't stall). A failure is
+    kept for 'S' and retried after RETRY_MS."""
     now = time.ticks_ms()
     try:
         if mg["err"] is not None:             # (re)connect first
             if vtref.read_u16() < VTREF_MIN:
                 raise RuntimeError("Multigrain off")
             mg_link(dbg[0].khz if dbg[0] else 8000)
-        mg["poll"].read()
+        mac = mg["mac_at"] is not None and time.ticks_diff(now, mg["mac_at"]) < 1000
+        full = full or mac
+        mg["poll"].read(focus=not full)
+        gv["perf"][3] += 1
+        gv["perf"][4] += time.ticks_diff(time.ticks_ms(), now)
+        if full:
+            mg["full_at"] = now
         mg["err"] = None
         mg["next"] = time.ticks_add(now, POLL_MS)
     except Exception as e:                    # SWDError, a module mid-reset, ...
         mg["err"] = str(e) or type(e).__name__
         mg["next"] = time.ticks_add(now, RETRY_MS)
     mg["at"], mg["stale"] = now, False
-    ui_draw()
+    ui_data()
+    if gc.mem_free() < GC_FREE:               # ~17 ms: here, not mid-animation, and only when
+        t = time.ticks_us()                   # needed (the grain maths makes ~300 KB/s of
+        gc.collect()                          # garbage), so the heap stays in one piece
+        gv["perf"][7] += time.ticks_diff(time.ticks_us(), t)
 
 def mg_json():
+    """The latest poll as JSON pieces (see Poller.json)."""
     p = mg["poll"]
     if mg["err"] is None and p is not None and p.snap is not None:
         return p.json()
-    return json.dumps({"mode": "swd", "connected": False, "error": mg["err"]}).encode()
+    return [json.dumps({"mode": "swd", "connected": False, "error": mg["err"]}).encode()]
 
 def mg_select(n):
     """Edit focus -> sound n, no halt: mg_load.select_nohalt's two writes."""
@@ -138,7 +155,10 @@ def mg_select(n):
 
 # --- the Pico's own UI (gv_ui.py) ---
 MAC_MS = 3000                                 # no Mac frame for this long -> our own UI
-gv = {"ui": None, "mac_at": None, "own": False}
+FRAME_MS = 33                                 # WAVE's grain animation, ~30 fps
+gv = {"ui": None, "mac_at": None, "own": False, "frame": 0,
+      "perf": [0, 0, 0, 0, 0, time.ticks_ms(), 0, 0, 0, 0, 0]}  # anim frames, anim us, push us,
+                    # polls, poll ms, since, all frames pushed, gc us, loops, last push, max gap
 
 def ui_snap():
     p = mg["poll"]
@@ -158,24 +178,47 @@ def ui_draw():
     if gv["ui"] is None:
         from gv_ui import UI
         gv["ui"] = UI()
+    gv["ui"].render(ui_snap())
+    ui_push()
+    gv["frame"] = time.ticks_add(time.ticks_ms(), FRAME_MS)   # this was a frame too
+
+def ui_data():
+    """A poll came in: an animating WAVE takes it at its next frame (no extra redraw, so
+    the frame cadence holds); anything else redraws now."""
     ui = gv["ui"]
-    ui.render(ui_snap())
-    a, b = ui.buf, oled.buffer
+    if ui is not None and gv["own"] and ui_own() and ui.view == "WAVE":
+        ui.update(ui_snap())
+        if ui.animating():
+            return
+    ui_draw()
+
+def ui_push(rows=None):
+    """Send what changed in the UI's frame to the panel: rows = (r0, n) when the caller
+    knows (the animation: no compare, no allocation), else the changed band."""
+    a, b = gv["ui"].buf, oled.buffer
     if not gv["own"]:                         # taking the screen back: send it all
         gv["own"] = True
         b[:] = a
         oled.show()
         return
-    if a == b:
-        return
-    r0 = 0
-    while a[r0 * BPR:(r0 + 1) * BPR] == b[r0 * BPR:(r0 + 1) * BPR]:
-        r0 += 1
-    r1 = 127
-    while a[r1 * BPR:(r1 + 1) * BPR] == b[r1 * BPR:(r1 + 1) * BPR]:
-        r1 -= 1
-    b[r0 * BPR:(r1 + 1) * BPR] = a[r0 * BPR:(r1 + 1) * BPR]
-    oled.show_rows(r0, r1 - r0 + 1)
+    if rows is None:
+        if a == b:
+            return
+        r0 = 0
+        while a[r0 * BPR:(r0 + 1) * BPR] == b[r0 * BPR:(r0 + 1) * BPR]:
+            r0 += 1
+        r1 = 127
+        while a[r1 * BPR:(r1 + 1) * BPR] == b[r1 * BPR:(r1 + 1) * BPR]:
+            r1 -= 1
+        rows = (r0, r1 - r0 + 1)
+    r0, n = rows
+    fb[r0 * BPR:(r0 + n) * BPR] = memoryview(a)[r0 * BPR:(r0 + n) * BPR]
+    oled.show_rows(r0, n)
+    pf, t = gv["perf"], time.ticks_ms()
+    pf[6] += 1
+    if pf[9]:
+        pf[10] = max(pf[10], time.ticks_diff(t, pf[9]))
+    pf[9] = t
 
 def ui_key(name):
     if not ui_own() or gv["ui"] is None:
@@ -201,7 +244,10 @@ def swd_op(op, body):
     G (reg u8, word)...      x (release the pins, stop polling until the next c)
     S -> the latest poll as JSON (polls first if a write came in or it's > FRESH_MS old)
     v [view] -> our UI rendered from the latest poll (8192 bytes) + that poll as JSON
-    v view \n snapshot JSON -> the same for that snapshot (tests; the panel stays live)"""
+    v snapshot JSON (+ "_view") -> just the frame, for that snapshot (tests; the panel
+                 stays live; the JSON is parsed in place: no copy from a busy heap)
+    P -> UI / poll timing since the last P, as JSON
+    (test renders start the grain dots afresh at clock 0 unless the snapshot scripts them)"""
     if op in WRITES:
         mg["stale"] = True
     if op == 0x63:                            # 'c'
@@ -216,18 +262,35 @@ def swd_op(op, body):
         mg["auto"], mg["err"] = False, "SWD released"
         return b""
     if op == 0x53:                            # 'S'
-        if mg["auto"] and (mg["stale"] or time.ticks_diff(time.ticks_ms(), mg["at"]) > FRESH_MS):
-            mg_poll()
+        mg["mac_at"] = time.ticks_ms()
+        fa = mg["full_at"]
+        if mg["auto"] and (mg["stale"] or fa is None or mg["at"] != fa
+                           or time.ticks_diff(time.ticks_ms(), fa) > FRESH_MS):
+            mg_poll(full=True)
         return mg_json()
+    if op == 0x50:                            # 'P'
+        f, au, pu, n, pm, t0, frames, gu, loops, _, gap = gv["perf"]
+        now = time.ticks_ms()
+        gv["perf"] = [0, 0, 0, 0, 0, now, 0, 0, 0, 0, 0]
+        secs = max(1, time.ticks_diff(now, t0)) / 1000
+        return json.dumps({"secs": secs, "fps": frames / secs, "anim_ms": au / max(1, f) / 1000,
+                           "push_ms": pu / max(1, f) / 1000, "polls": n,
+                           "poll_ms": pm / max(1, n), "gc_ms": gu / max(1, n) / 1000,
+                           "anim_fps": f / secs, "loops": loops / secs, "max_gap_ms": gap,
+                           "free": gc.mem_free()}).encode()
     if op == 0x76:                            # 'v'
         if gv["ui"] is None:
             from gv_ui import UI
             gv["ui"] = UI()
-        view, _, js = bytes(body).partition(b"\n")
+        given = body[:1] == b"{"
+        snap = json.loads(body) if given else dict(ui_snap())
+        view = snap.pop("_view", None) if given else bytes(body).decode()
+        del body
         if view:
-            gv["ui"].view = view.decode()
-        gv["ui"].render(json.loads(js) if js else ui_snap())
-        out = bytes(gv["ui"].buf) + (js or mg_json())
+            gv["ui"].view = view
+        snap.setdefault("_steps", [0])
+        gv["ui"].render(snap)
+        out = [bytes(gv["ui"].buf)] + ([] if given else mg_json())
         ui_draw()
         return out
     s = dbg[0]
@@ -268,15 +331,18 @@ def swd_packet():
     hd = bytearray(4)
     read_into(hd)
     seq, op, n = hd[0], hd[1], hd[2] | hd[3] << 8
-    body = bytearray(n)
-    if n:
-        read_into(body)
+    if n > 4096:
+        gc.collect()                          # big test snapshots: room in one piece
+    body = inb.read(n) if n else b""          # bytes: json.loads takes it as it is
     try:
-        out, st = swd_op(op, body), 0
+        out, st = swd_op(op, body), 0         # bytes, or a list of pieces
     except Exception as e:                    # SWDError, bad args: report, keep running
         out, st = str(e).encode(), 1
-    sys.stdout.buffer.write(("@D %d %d %d\n" % (seq, st, len(out))).encode())
-    sys.stdout.buffer.write(out)
+    if not isinstance(out, list):
+        out = [out]
+    sys.stdout.buffer.write(("@D %d %d %d\n" % (seq, st, sum(len(b) for b in out))).encode())
+    for b in out:
+        sys.stdout.buffer.write(b)
 
 def packet():
     read_into(one)                            # hunt for the A5 5A sync
@@ -313,6 +379,7 @@ changed = [0] * len(buttons)
 micropython.kbd_intr(-1)
 try:
     while True:
+        gv["perf"][8] += 1
         if es[2]:
             irq = machine.disable_irq()
             n = es[2]
@@ -335,6 +402,18 @@ try:
             mg_poll()
         elif not gv["own"] and ui_own() or gv["ui"] and gv["ui"].flash_due():
             ui_draw()                         # the Mac went quiet / a flash box ran out
+        elif gv["own"] and time.ticks_diff(now, gv["frame"]) >= 0:
+            late = time.ticks_diff(now, gv["frame"])
+            gv["frame"] = time.ticks_add(gv["frame"] if late < FRAME_MS else now, FRAME_MS)
+            t0 = time.ticks_us()
+            rows = gv["ui"].animate()         # WAVE: the next grain frame
+            if rows:
+                t1 = time.ticks_us()
+                ui_push(rows)
+                pf = gv["perf"]
+                pf[0] += 1
+                pf[1] += time.ticks_diff(t1, t0)
+                pf[2] += time.ticks_diff(time.ticks_us(), t1)
 except SystemExit:
     oled.fill(0)
     oled.text("GRAINVIEW", 28, 52, 15)

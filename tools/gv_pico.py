@@ -452,8 +452,30 @@ def ui_cases(snap):
             for i, k in enumerate(d[sc]):
                 d[sc][k] = (-1 if k in ("SCAN", "TONE") else 0) if i % 2 else 1
         s["morph"] = 1.0
+    def grains(**knobs):                     # play it for ~1.4 s of scripted time
+        def fn(s, d):
+            import random
+            rng = random.Random(7)
+            s["playing"] = n
+            d[s["edit_scene"]].update(knobs.get("p", {}))
+            for k in ("link_rs", "link_sp"):
+                if k in knobs:
+                    d[k] = knobs[k]
+            if "sync" in knobs:
+                s["sync"], s["clock_period"] = 1, knobs["sync"]
+            s["_steps"] = list(range(1000, 2400, 33))
+            s["_rand"] = [round(rng.random(), 4) for _ in range(1200)]
+        return fn
     out = [(name, case(fn)) for name, fn in (("mods", mods), ("sceneB", scene_b), ("empty", empty),
            ("unlinked", unlinked), ("sync", sync), ("longname", long_name), ("edges", edges))]
+    shapes = (0.0, 0.2, 0.4, 0.55, 0.75, 0.9, 1.0)   # BELL SINC TRI DECAY RAMP TUKEY SQUARE
+    out += [("grains%d" % i, case(grains(p={"SHAPE": v, "SCAN": 0.3, "LEVEL": 0.8})))
+            for i, v in enumerate(shapes)]
+    out += [("grainsLinked", case(grains(link_rs=1, link_sp=1, p={"RATE": 0.6, "SIZE": 0.2}))),
+            ("grainsFree", case(grains(link_rs=0, link_sp=0, p={"RATE": 0.9, "SIZE": 0.1}))),
+            ("grainsSync", case(grains(sync=0.25, p={"RATE": 0.7}))),
+            ("grainsScan", case(grains(p={"SCAN": -0.9, "START": 0.2, "WRAP": 0.5}))),
+            ("grainsDense", case(grains(link_rs=0, p={"RATE": 1.0, "SIZE": 0.9, "PITCH": 0.1})))]
     return out + [("nolink", {"connected": False, "error": "Multigrain off", "_sound": n})]
 
 
@@ -489,9 +511,9 @@ def _ui_views(link, views, tag, k, snap=None):
     out_dir = os.path.join(os.path.dirname(HERE), "tmp")
     os.makedirs(out_dir, exist_ok=True)
     for view in views:
-        body = view.encode() + (b"\n" + json.dumps(snap).encode() if snap else b"")
-        r = link.swd("v", body, timeout=5)
-        pico, used = unpack(r[:FRAME]), r[FRAME:]
+        js = json.dumps({**snap, "_view": view}, separators=(",", ":")).encode() if snap else b""
+        r = link.swd("v", js or view.encode(), timeout=10)
+        pico, used = unpack(r[:FRAME]), js or r[FRAME:]
         with tempfile.NamedTemporaryFile("wb", suffix=".json", delete=False) as f:
             f.write(used)
         emu = unpack(subprocess.run(["node", os.path.join(HERE, "gv_render.js"), f.name, view],
