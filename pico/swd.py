@@ -314,7 +314,12 @@ class SWD:
 
     def read_block32(self, a, n):
         """n words from word-aligned a, as an array('I')."""
-        out = array.array("I", [0] * n)
+        out = array.array("I", bytes(4 * n))
+        self._read_into(out, a, n)
+        return out
+
+    def _read_into(self, out, a, n):
+        """n words from word-aligned a into out (any 4n-byte buffer)."""
         self._csw_size(CSW_32)
         i = 0
         while i < n:
@@ -333,13 +338,13 @@ class SWD:
             i += k
             a += 4 * k
             self.tar = a if a & 0x3FF else None
-        return out
 
     def read_block8(self, a, n):
         lo = a & ~3
         words = (a + n - lo + 3) // 4
-        b = bytes(self.read_block32(lo, words))
-        return b[a - lo:a - lo + n]
+        buf = bytearray(4 * words)
+        self._read_into(buf, lo, words)
+        return bytes(memoryview(buf)[a - lo:a - lo + n])
 
     # ---- core debug (same register sequence as pyOCD's cortex_m) ----
     def halt(self):

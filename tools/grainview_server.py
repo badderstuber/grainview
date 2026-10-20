@@ -6,8 +6,9 @@ with the same API, so the UI can't tell them apart:
     --mock   in-memory fake module (no hardware) - for UI work
     default  live module over SWD (ST-Link), built on the hardware-tested
              helpers in mg_param.py / mg_load.py. No halts except WAV load.
-    --swd pico   the same, through the GRAINVIEW Pico's SWD master (gv_pico.PicoTarget,
-             J3 -> JTRACE) instead of the ST-Link
+    --swd pico   the same, through the GRAINVIEW Pico (J3 -> JTRACE) instead of the
+             ST-Link: the Pico polls the module itself (pico/mgpoll.py), /state is its
+             snapshot; actions drive its SWD master via gv_pico.PicoTarget
 
 API (all JSON):
     GET  /state                 module snapshot (see Backend.snapshot)
@@ -418,7 +419,6 @@ class SwdBackend:
         self.lock = threading.Lock()
         self.session = None
         self.t = None
-        self.replay = None               # Pico: gv_pico.ReplayReads (one round trip per poll)
         self.snap = {"mode": self.mode, "connected": False, "error": "connecting",
                      "sounds": []}
         self.st, self.st_t = None, 0.0   # live settings cache (read every SETTINGS_EVERY s)
@@ -429,7 +429,7 @@ class SwdBackend:
             import gv_pico  # noqa: E402 - needs pyserial
             t = gv_pico.PicoTarget(self.probe, self.freq // 1000)
             t.connect()
-            self.t, self.replay = t, gv_pico.ReplayReads(t)
+            self.t = t
             return
         try:
             self.session = P.connect(self.freq)
@@ -459,12 +459,12 @@ class SwdBackend:
                 time.sleep(2.0)
 
     def _read(self):
-        if self.replay is None:
+        if self.probe is None:
             return self._read_from(self.t)
-        try:
-            return self._read_from(self.replay.begin())
-        finally:
-            self.replay.end()
+        snap = self.t.snapshot()             # the Pico's own poll
+        if not snap.get("connected"):
+            raise RuntimeError(snap.get("error") or "Pico: no Multigrain")
+        return snap
 
     def _read_from(self, t):
         if self.st is None or time.time() - self.st_t >= SETTINGS_EVERY:

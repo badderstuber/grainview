@@ -307,7 +307,7 @@ function status(b,name,right,rv=10){const {T}=fs(),y=H-1-fm.desc(T),top=H-fm.lh(
 // WAVE: no values - the header, the wave box (waveform + grains) and the status line.
 // Styles B-D show the touched knob in the status line instead of a hero (touchText).
 function vWave(b){const {M}=fs(),S=ws(),ro=S.readout&&touchRecent()?touchText():null,top=header(b);
-  const bot=status(b,'WAVE',ro||'PLAY S'+(M_?M_.playing+1:'-'),ro?15:10);
+  const bot=status(b,'WAVE',ro||'PLAY S'+(M_&&M_.connected?M_.playing+1:'-'),ro?15:10);
   const s=snd(),mh=S.morph?3:0,h=bot-top-2-mh,now=performance.now();
   grainsStep(now);
   if(s&&s.file){const [s0,e]=win();wave(b,1,top,W-2,h,seedOf(s.file),s0,e,scanPos(),waveHot());

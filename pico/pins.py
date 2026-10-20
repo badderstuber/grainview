@@ -26,4 +26,9 @@ BUTTONS = (
     ("SETUP", 12),
 )
 
-# Reserved: SWCLK 14, SWDIO 15 (swd.py defaults), VTREF sense 26 (ADC0), debug UART 0/1
+# SWD to the Multigrain (J3 -> JTRACE)
+SWCLK = 14
+SWDIO = 15
+VTREF = 26     # ADC0: the Multigrain's 3.3 V (through 1 kOhm) = it's powered
+
+# Reserved: debug UART 0/1

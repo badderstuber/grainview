@@ -5,9 +5,60 @@ Multigrain** (3U granular sampler) — it's hard to use without a screen and the
 audio-file workflow is confusing. This file is the single place to pick the
 project back up if I lose the chat session.
 
-_Last updated: 2026-10-20._
+_Last updated: 2026-10-20 (late)._
 
 ---
+
+## Update 2026-10-20 (later still) — GRAINVIEW draws its own UI ✅ (first views)
+
+- **The Pico renders the UI itself** from its own poll whenever the Mac isn't sending frames
+  (none for 3 s → native UI; emulator open → its frames win, as before). Ported from the
+  emulator, same layout maths + fonts: header, status line + page dots, **WAVE** (static
+  waveform + START/WRAP/scan markers, no grain dots yet), **PARAM** (real units, link chain
+  icons), **MOD**, the NO MODULE LINK / flash boxes. VIEW / encoder page the views, BACK →
+  WAVE, **SOUND‹› select sounds on the module** (select_nohalt's 2 writes, then a fresh
+  poll). PUSH / FILE / A/B / SETUP just flash for now; SETTINGS shows "not on the Pico yet".
+- Files: `pico/gv_draw.py` (gv_draw.js on framebuf: glyph blits with a palette),
+  `pico/gv_units.py` (gv_units.js; JS rounding kept), `pico/gv_ui.py`, `pico/gv_fonts.py`
+  (Spleen set, generated from fonts/gv_fonts.js by gen_pico_map.py, so deploy refreshes it).
+- **Parity check:** `tools/gv_render.js` runs the emulator's own script headless in Node
+  (DOM stubbed) → reference frame; `tools/venv/bin/python tools/gv_pico.py ui` compares the
+  Pico's frame (new op `v`) pixel by pixel + writes `tmp/gv_ui_*.png` (Pico | emulator |
+  diff). `--all-sounds` (edit focus 1-8, restored) and `--cases` (made-up: mod routings,
+  scene B, empty sound, no links, SYNC, long name, extreme values, no link) → **all 48
+  frames MATCH** ✅. Found + fixed an emulator bug on the way ("PLAY SNaN" with no link).
+- Timing (Pico): font import 0.9 s at boot (mpy-cross would remove it); render 20-34 ms
+  (WAVE's first 41 ms), only changed rows go over SPI.
+- **On the panel (Leo, 2026-10-20): all good** — VIEW / encoder / SOUND‹› work.
+- Next: grain dots on WAVE (animation, ~30 fps budget), knob-touch hero, SETTINGS view;
+  then FILE browser + load on the Pico (needs the one-halt call on-Pico).
+
+## Update 2026-10-20 (late) — the Pico polls the Multigrain itself ✅
+
+- **`pico/mgpoll.py`**: the Pico reads + decodes the whole `/state` snapshot on its own
+  (8 sounds' scenes + mods, folder/file/cursor/links, live knobs, store bitmaps, settings
+  every 1 s). Addresses + decode rules: **`pico/mg_map.py`, generated** by
+  `tools/gen_pico_map.py` from mg_load / mg_param / mg_preset / the server /
+  gv_settings.json (single source of truth; `gv_pico.py deploy` regenerates it).
+- **`main.py`** connects by itself when VTREF (GP26) > 2.5 V, polls every 200 ms (retry 2 s
+  on error), and shows "Multigrain OK / S<n> <file>" under the splash until the Mac sends
+  a frame. New SWD op **`S`** = latest snapshot as JSON (polls afresh first if a Mac write
+  came in or it's > 100 ms old). `x` releases the pins and stops polling until the next `c`.
+  ⚠️ The Pico now drives SWCLK/SWDIO from boot - don't have an ST-Link on JTRACE at the
+  same time (or send `x` first).
+- **Server `--swd pico`**: `/state` = the Pico's snapshot (one `S` per poll); actions still
+  Mac-driven through `PicoTarget`. `ReplayReads` + the `R` scatter op are gone (superseded).
+- **Check:** `tools/venv/bin/python tools/gv_pico.py poll` → "Pico snapshot = Mac decode"
+  (every field except the moving live/morph/clock values) ✅. Server select 5→2 and
+  load 3→2 through it ✅; after a Pico reset it connects + polls with no Mac connect ✅.
+- **Speed (Pico, 8 MHz):** first version 117 ms + 54 ms JSON. Now **45 ms** per poll
+  (31 ms of it SWD for 34 spans / 8.3 KB) + ~5 ms JSON when asked: a sound (and the
+  settings) is re-decoded + re-JSON'd only when its raw bytes change, file names read
+  32 bytes first, binary-search span lookup, no bigint bitmaps, less allocation in
+  `swd.read_block8`. ~23% of the main loop at 5 Hz; core 1 (`_thread`) if that ever
+  matters. Untested: a file name > 31 chars (the 256-byte fallback read).
+- Next: render the UI on the Pico from its own snapshot (start with one view), then the
+  actions (select / load / presets) on the Pico without the Mac.
 
 ## Update 2026-10-20 (night) — the server runs on the Pico's SWD, no ST-Link ✅
 
