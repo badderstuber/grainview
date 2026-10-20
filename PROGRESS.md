@@ -9,6 +9,44 @@ _Last updated: 2026-10-21._
 
 ---
 
+## Update 2026-10-21 (later) — FILE browser on the Pico ✅ (+ loading, presets, projects)
+
+- **FILE** (the emulator's vFile): FILE opens on the sound's folder, FILE again steps
+  PROJECT → WAVS → RECS → PRESETS → PROJECTS, `..` / BACK = the root (folders with WAV counts,
+  CUR on the sound's folder). PUSH on a WAV = load it into the selected sound (box "LOADING
+  name"); another folder switches the sound's folder (ALT+folder). PRESETS / PROJECTS = the
+  48 slots (LCK / CUR) with the slot menu: LOAD / SAVE / OVERWRITE (2nd push) / LOCK / UNLOCK,
+  OPEN / SAVE NOW.
+- **`pico/mgfile.py`** (new) = the Pico's SWD actions, ported from mg_load.py / mg_preset.py
+  (same functions, guards, messages): lists (names peeked 32 bytes, Recs from the int list),
+  load_plan + the one-halt call, preset load / save / lock, project open, autosave now. The
+  empty-sound fix-up (2nd load) runs from the poll instead of blocking (`main.mg_fix`); a
+  failed register write still resumes the core. The UI returns actions (`root` / `files` /
+  `load` / `store` / `select`), `main.mg_do` runs them, `UI.done()` gets the outcome.
+- Entry points + list addresses now in the generated `mg_map.py` (gen_pico_map.py).
+- **Parity:** `_file` / `_flash` test hooks both sides; `gv_pico.py ui` checks view `FILE`
+  by default (live: the real list read by the Pico, 6 views), `--cases` adds 23 (root, lists
+  top / scrolled / end, empty / loading / SD error, slots, every menu shape incl. armed,
+  LOADING box, no link). Emulator change: VIEW now closes a slot menu too (it stayed open
+  behind the view, so the next BACK did nothing visible).
+- **Checked on the Pico:** live 6 views MATCH, `--cases` **295 frames MATCH**. Offline
+  first (CPython + framebuf shim vs gv_render.js: 301 frames; key sequences as the emulator).
+- **Hardware-tested through the Pico (REPL, mgfile directly), 2026-10-21:** on throwaway
+  Project05: project open (+ refused missing Project06); same-folder load; **empty sound,
+  other folder** (reset + fix-up landed on [3]); out-of-range refused; Preset03 save,
+  overwrite, lock, save-over-locked refused, load (S1 back to the saved file), unlock;
+  autosave now. Back on Project26: **non-empty sound, other folder** both ways (S6 → /Wavs →
+  back to drz1_rid.wav). Each ~0.3–0.6 s. Project26 left as it was.
+- Leo tried FILE on the panel: all good. Encoder direction flipped on his ask: **clockwise =
+  +1** (scroll down / next view / value up), in main.py's decoder (the Mac's `@E` follows).
+- **A/B on the Pico** (the last unported bit): flips the module's edited scene, no halt -
+  `main.mg_scene` = grainview_server.set_scene's two writes (u8 0x24025b48, state+0x30 = 0;
+  hardware-verified from the Mac 2026-10-12: panel A/B + knob LEDs follow). Global (keeps
+  an edit / overlay open, as the emulator); a failed write flashes and the next poll puts
+  the scene back. Checked: offline key sequences, 301 frames still MATCH, and from the Pico
+  over SWD: wrote B → poll B, A → A. **The Pico UI now has everything the emulator has.**
+- The Pico hung on USB again before the deploy (no reply, not even Ctrl-C); replug fixed it.
+
 ## Update 2026-10-21 — SETUP overlay on the Pico ✅ (+ Sel plays)
 
 - **SETUP** (the emulator's vSetup): SETUP opens the groups (MODULE 11 / PRESET 4 / SAMPLE

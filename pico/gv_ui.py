@@ -4,21 +4,29 @@
 # Ported so far: header, status line, WAVE (waveform + animated grain dots, style B with
 # the knob readout), PARAM, MOD, SETTINGS (browse; live = read-only, as the emulator), the
 # SETUP overlay (MODULE / PRESET read-only live, GRAINVIEW's own settings editable, kept in
-# CFG on flash), the knob-touch hero, the NO MODULE LINK / flash boxes. Still Mac-only:
-# FILE, A/B.
+# CFG on flash), the FILE overlay (the card's folders, load a WAV, the PRESETS / PROJECTS
+# slot menus), SOUND<> + A/B (the module's selected sound / edited scene), the knob-touch
+# hero, the NO MODULE LINK / flash boxes - everything the emulator has.
 #
 #   ui = UI()
 #   ui.render(snap)                     # into ui.buf (128x128 GS4, the SSD1327's layout)
 #   ui.update(snap)                     # new data only; the next animate() draws it
 #   ui.animate()                        # WAVE: next grain frame (~30 fps) -> the rows it
 #                                       # changed (r0, n), or None
-#   act = ui.btn("SOUND>")              # -> None or ("select", n, play) for main.py to do
+#   act = ui.btn("SOUND>")              # -> None or an action for main.py to do over SWD:
+#                                       # ("select", n, play) ("scene", "A"|"B")
+#                                       # ("root",) ("files", folder)
+#                                       # ("load", folder, index, name)
+#                                       # ("store", "preset"|"project", action, n, ...)
+#   ui.done(act, res, err)              # ...and what came of it (the emulator's api() reply)
 # A snapshot with "_steps" (clock values, ms) + "_rand" (random numbers) renders once per
 # step with those - the same script the emulator runs in tools/gv_render.js (tests); also
 # "_touch": [knob, mod source or null], "_dived", "_setCur" set that UI state for the test;
 # "_setup": [group or null, group cursor, row] opens SETUP, "_edit": the cursor row's value
 # being edited; "_gv": {"selPlays", "touchOn"} (else the defaults); "_prev": earlier
-# snapshots fed through the knob-touch detection first (as polls).
+# snapshots fed through the knob-touch detection first (as polls); "_file": {"folder",
+# "files" (a WAV folder's names), "cur", "ok", "counts", "menu": [cur, armed]} opens FILE
+# there; "_flash": [message, label] shows that box.
 import json
 import framebuf
 import math
@@ -68,6 +76,13 @@ SETUP_GROUPS = (("MODULE", "module"), ("PRESET", "preset"), ("SAMPLE", None), ("
 CFG = "gv_cfg.json"
 ONOFF = ("OFF", "ON")
 FIRMWARE = "1.4.8.0"
+# FILE overlay: the card's folders (the emulator's FOLDERS / FNAME); PRESETS / PROJECTS = the
+# SLOTS of each, from the poll's "store" (no fetch)
+FOLDERS = ("project", "Wavs", "Recs", "PRESETS", "PROJECTS")
+FNAME = {"project": "PROJECT", "Wavs": "WAVS", "Recs": "RECS", "PRESETS": "PRESETS",
+         "PROJECTS": "PROJECTS"}
+SLOTS = 48
+NO_STORE = {"projects": (), "presets": (), "locked": (), "project": None, "preset": None}
 
 
 def fmt(v, bip):                              # normalized: unipolar .42, bipolar +.42
@@ -197,7 +212,7 @@ class UI:
         self.view = "WAVE"
         self.sound, self.scene = 0, "A"
         self.snap = None
-        self.flash_msg, self.flash_until = None, 0
+        self.flash_msg, self.flash_label, self.flash_until = None, None, 0
         self.wave_key = self.wave = None      # cached synthetic waveform
         self.bg = bytearray(len(self.buf))    # WAVE without playhead + dots (animate() base)
         self.bg_key = self.box_ = None        # what bg shows / the wave box (x, y, w, h)
@@ -208,6 +223,9 @@ class UI:
         self.dived, self.set_cur = False, 0   # SETTINGS: cursor shown / row
         self.overlay, self.setup = None, [None, 0, 0]   # "SETUP" / [group, group cursor, row]
         self.edit = None                      # [group, entry, value, value before]
+        self.folder, self.files, self.file_cur = "", [], 0   # FILE: "ROOT" / a folder, its rows
+        self.files_ok, self.root_counts = False, {}   # list read / WAV counts at the root
+        self.menu = None                      # slot menu: [title, items, cur, armed]
         self.sel_plays = False                # SOUND<> also switches playback
         self.load_cfg()
         # SETUP > GRAINVIEW (the emulator's GV_SETTINGS; one wave style + font set here)
@@ -588,6 +606,180 @@ class UI:
         except OSError as x:
             self.flash("not saved: " + str(x))
 
+    # ---- FILE (the card; PRESETS / PROJECTS = slots + a menu) ----
+    def store(self):
+        return self.snap and self.snap.get("store") or NO_STORE
+
+    def is_store(self, f=None):
+        return (self.folder if f is None else f) in ("PRESETS", "PROJECTS")
+
+    def file_lo(self):                        # rows run from -1 ('..' = up to the root)
+        return 0 if self.folder == "ROOT" else -1
+
+    def root_row(self, y, rh, f, on):
+        """NAME ...... [CUR] count  (CUR = the selected sound's WAV folder)."""
+        d, T, M, S, s = self.d, self.T, self.M, self.store(), self.snd()
+        if on:
+            d.rect(0, y, W, rh, 15)
+        n = len(S["presets" if f == "PRESETS" else "projects"]) if self.is_store(f) \
+            else self.root_counts.get(f)
+        tag = (("CUR " if s and s["folder"] == f else "") + ("" if n is None else str(n))).strip()
+        d.text(M, "/" + FNAME[f], 2, y + M.asc, 0 if on else 12)
+        d.text_r(T, tag, W - 2, y + T.asc, 0 if on else 8)
+
+    def slot_row(self, y, rh, i, on):
+        """NN PresetNN ...... [LCK] [CUR]"""
+        d, T, M, S = self.d, self.T, self.M, self.store()
+        pre = self.folder == "PRESETS"
+        have = i in S["presets" if pre else "projects"]
+        cur = S["preset" if pre else "project"] == i
+        lock = pre and i in S["locked"]
+        if on:
+            d.rect(0, y, W, rh, 15)
+        nn, ty = "%02d" % (i + 1), y + T.asc
+        d.text(T, nn, 2, ty, 0 if on else 7)
+        x = 4 + T.width("00") + 3
+        tags = (("LCK " if lock else "") + ("CUR" if cur else "")).strip()
+        if tags:
+            d.text_r(T, tags, W - 2, ty, 0 if on else 15 if cur else 8)
+        nm = ("Preset" if pre else "Project") + nn if have else "- empty -"
+        d.text(M, fit(M, nm, W - x - 4 - (T.width(tags) + 3 if tags else 0)), x, y + M.asc,
+               0 if on else 12 if have else 5)
+
+    def v_file(self):
+        d, M, F = self.d, self.M, self.files
+        top = self.header()
+        root = self.folder == "ROOT"
+        bot = self.status("FILE /" + ("" if root else FNAME.get(self.folder, "")),
+                          "" if root or not F or self.file_cur < 0
+                          else "%d/%d" % (self.file_cur + 1, len(F)))
+        rh = M.lh + 1
+        rows, lo = (bot - top) // rh, self.file_lo()
+        first = lo + max(0, min(self.file_cur - lo - (rows >> 1), len(F) - lo - rows))
+        for r in range(rows):
+            i = first + r
+            if i >= len(F):
+                break
+            y, on = top + r * rh, i == self.file_cur
+            if i < 0:
+                if on:
+                    d.rect(0, y, W, rh, 15)
+                d.text(M, "..", 2, y + M.asc, 0 if on else 9)
+                if not F:
+                    sd = self.snap and self.snap.get("sd_state")
+                    d.text(M, "SD error" if sd == 3 else "empty folder" if self.files_ok
+                           else "loading list...", 2, y + rh + M.asc + 2, 8)
+            elif root:
+                self.root_row(y, rh, F[i], on)
+            elif self.is_store():
+                self.slot_row(y, rh, i, on)
+            else:
+                if on:
+                    d.rect(0, y, W, rh, 15)
+                d.text(M, fit(M, F[i], W - 4), 2, y + M.asc, 0 if on else 12)
+        if self.menu:
+            self.v_menu()
+
+    def v_menu(self):
+        d, T, M = self.d, self.T, self.M
+        title, items, cur, armed = self.menu
+        rh, lt = M.lh + 2, T.lh + 2
+        w = max([T.width(title)] + [M.width(it[0]) for it in items]) + 14
+        h = lt + len(items) * rh + 4
+        x, y = (W - w) >> 1, (H - h) >> 1
+        d.rect(x - 1, y - 1, w + 2, h + 2, 0)
+        d.frame(x, y, w, h, 15)
+        d.text(T, title if armed is None else "PUSH AGAIN", x + 4, y + 2 + T.asc,
+               9 if armed is None else 15)
+        for i, it in enumerate(items):
+            yy, on = y + lt + 2 + i * rh, i == cur
+            if on:
+                d.rect(x + 2, yy, w - 4, rh, 15)
+            d.text(M, it[0], x + 5, yy + 1 + M.asc, 0 if on else 12)
+
+    def open_root(self, frm):
+        """The card's root, cursor on the folder we came up from (WAV counts: main.py)."""
+        self.menu, self.overlay, self.folder = None, "FILE", "ROOT"
+        self.files, self.files_ok = list(FOLDERS), True
+        self.file_cur = FOLDERS.index(frm) if frm in FOLDERS else 0
+        return ("root",)
+
+    def open_files(self, folder=None):
+        """A folder (None = the selected sound's): its names come from main.py (-> done());
+        PRESETS / PROJECTS are the slots, cursor on the current one."""
+        self.menu, self.overlay = None, "FILE"
+        self.files, self.files_ok, self.folder, self.file_cur = [], False, folder or "", -1
+        if not self.is_store(folder):
+            return ("files", folder)
+        c = self.store()["preset" if folder == "PRESETS" else "project"]
+        self.files, self.files_ok, self.file_cur = list(range(SLOTS)), True, 0 if c is None else c
+        return None
+
+    def open_menu(self):
+        """A slot's menu: items (label, action, needs a 2nd push); BACK closes it."""
+        S, n = self.store(), self.file_cur
+        nn = "%02d" % (n + 1)
+        items = []
+        if self.folder == "PRESETS":
+            have, lock, what = n in S["presets"], n in S["locked"], "Preset" + nn
+            if have:
+                items.append(("LOAD", ("store", "preset", "load", n, what, "LOADING", True), False))
+            if not lock:
+                items.append(("OVERWRITE" if have else "SAVE",
+                              ("store", "preset", "save", n, what, "SAVING", False), have))
+            if have:
+                items.append(("UNLOCK" if lock else "LOCK", ("store", "preset", "lock", n, what,
+                                                             "UNLOCKING" if lock else "LOCKING", False), False))
+            title = "PRESET " + nn
+        else:
+            if n not in S["projects"]:
+                self.flash("empty slot")
+                return
+            what = "Project" + nn
+            if S["project"] == n:
+                items.append(("SAVE NOW", ("store", "project", "save", n, what, "SAVING", False), False))
+            else:
+                items.append(("OPEN", ("store", "project", "load", n, what, "OPENING", True), False))
+            title = "PROJECT " + nn
+        items.append(("BACK", None, False))
+        self.menu = [title, items, 0, None]
+
+    def menu_push(self):
+        m = self.menu
+        _, act, confirm = m[1][m[2]]
+        if not act:
+            self.menu = None
+        elif confirm and m[3] != m[2]:
+            m[3] = m[2]
+        else:
+            self.menu = None
+            return act
+        return None
+
+    def done(self, act, res=None, err=None):
+        """main.py did act (from btn()): res = what it returned, err = why it failed."""
+        k = act[0]
+        if k == "root":                       # counts are extras: a failure leaves them
+            if err is None:
+                self.root_counts.update(res)
+        elif k == "files":
+            if err is not None:
+                self.overlay = None
+                self.flash(err)
+            else:
+                self.folder, cur, self.files = res
+                self.files_ok = True
+                self.file_cur = max(0, min(len(self.files) - 1, cur)) if self.files else -1
+        elif err is not None:
+            self.flash(err)
+        elif k == "load":
+            self.overlay = None
+            self.flash(act[3], "LOADING")
+        elif k == "store":
+            if act[6]:
+                self.overlay = None
+            self.flash(act[4], act[5])
+
     # ---- knob touch ----
     def detect_touch(self):
         s = self.snd()
@@ -692,7 +884,9 @@ class UI:
         else:
             self.bg_key = None
             self.fb.fill(0)
-            if self.overlay == "SETUP":
+            if self.overlay == "FILE":
+                self.v_file()
+            elif self.overlay == "SETUP":
                 self.v_setup()
             elif self.touch_active():
                 self.v_touch()
@@ -716,7 +910,7 @@ class UI:
     def overlays(self):
         snap = self.snap
         if self.flash_msg and time.ticks_diff(self.flash_until, time.ticks_ms()) > 0:
-            self.box(self.flash_msg)
+            self.box(self.flash_msg, self.flash_label)
         elif not (snap and snap.get("connected")):
             self.box("NO MODULE LINK")
 
@@ -740,7 +934,9 @@ class UI:
         r = list(snap.get("_rand", ()))
         clock, rand = self.clock, self.rand
         kept = (self.touch, self.tb, self.dived, self.set_cur, self.overlay, self.setup, self.edit,
-                self.sel_plays, self.touch_on)
+                self.sel_plays, self.touch_on, self.folder, self.files, self.file_cur,
+                self.files_ok, self.root_counts, self.menu, self.flash_msg, self.flash_label,
+                self.flash_until)
         gv = snap.get("_gv") or {}            # GRAINVIEW's own settings: the defaults unless given
         self.sel_plays, self.touch_on = bool(gv.get("selPlays")), gv.get("touchOn", 1) != 0
         su = snap.get("_setup")
@@ -749,6 +945,19 @@ class UI:
         if su and su[0] is not None and "_edit" in snap:
             grp = SETUP_GROUPS[su[0]][1]
             self.edit = [grp, self.items(grp)[su[2]], snap["_edit"], None]
+        live = {k: v for k, v in snap.items() if k != "_steps"}
+        fl, self.menu, self.flash_msg = snap.get("_file"), None, None
+        if fl:
+            self.overlay, self.folder, self.snap = "FILE", fl["folder"], live
+            self.files = (list(FOLDERS) if self.folder == "ROOT" else list(range(SLOTS))
+                          if self.is_store() else fl.get("files") or [])
+            self.file_cur, self.files_ok = fl.get("cur", 0), fl.get("ok", True) is not False
+            self.root_counts = dict(fl.get("counts") or {})
+            if fl.get("menu"):
+                self.open_menu()
+                self.menu[2], self.menu[3] = fl["menu"]
+        if snap.get("_flash"):
+            self.flash(*snap["_flash"])
         self.rand = lambda: r.pop(0)
         self.g_list, self.g_acc, self.g_t, self.g_key, self.g_ph = [], 0, None, None, 0
         self.bg_key, self.testing = None, True
@@ -760,7 +969,6 @@ class UI:
                 self.update(p)
             self.testing = True
         self.dived, self.set_cur = bool(snap.get("_dived")), snap.get("_setCur", 0)
-        live = {k: v for k, v in snap.items() if k != "_steps"}
         try:
             for t in snap["_steps"]:
                 self.clock = lambda: t
@@ -768,12 +976,15 @@ class UI:
         finally:
             self.clock, self.rand, self.testing = clock, rand, False
             (self.touch, self.tb, self.dived, self.set_cur, self.overlay, self.setup, self.edit,
-             self.sel_plays, self.touch_on) = kept
+             self.sel_plays, self.touch_on, self.folder, self.files, self.file_cur,
+             self.files_ok, self.root_counts, self.menu, self.flash_msg, self.flash_label,
+             self.flash_until) = kept
             self.g_list, self.g_acc, self.g_t, self.g_key, self.g_ph = [], 0, None, None, 0
             self.bg_key = None
 
-    def flash(self, msg):
-        self.flash_msg, self.flash_until = msg, time.ticks_add(time.ticks_ms(), FLASH_MS)
+    def flash(self, msg, label=None):
+        self.flash_msg, self.flash_label = msg, label
+        self.flash_until = time.ticks_add(time.ticks_ms(), FLASH_MS)
 
     def wake_due(self):
         """True once when a flash box or the knob hero / readout has just run out (main.py
@@ -794,6 +1005,12 @@ class UI:
             su[1] = max(0, min(len(SETUP_GROUPS) - 1, su[1] + n))
         elif self.overlay == "SETUP":
             su[2] = max(0, min(len(self.items(SETUP_GROUPS[su[0]][1])) - 1, su[2] + n))
+        elif self.overlay == "FILE" and self.menu:
+            m = self.menu
+            m[2], m[3] = max(0, min(len(m[1]) - 1, m[2] + n)), None
+        elif self.overlay == "FILE":
+            lo = self.file_lo()
+            self.file_cur = max(lo, min(max(lo, len(self.files) - 1), self.file_cur + n))
         elif self.view == "SETTINGS" and self.dived:
             self.set_cur = max(0, min(len(CAT["sound"]) - 1, self.set_cur + n))
         else:                                 # page the views (clamped, as the emulator)
@@ -812,6 +1029,17 @@ class UI:
         elif self.overlay == "SETUP":
             g = SETUP_GROUPS[su[0]][1]
             self.edit_start(g, self.items(g)[su[2]])
+        elif self.overlay == "FILE" and self.menu:
+            return self.menu_push()
+        elif self.overlay == "FILE" and self.file_cur < 0:
+            return self.open_root(self.folder)
+        elif self.overlay == "FILE" and self.folder == "ROOT":
+            return self.open_files(self.files[self.file_cur])
+        elif self.overlay == "FILE" and self.is_store():
+            self.open_menu()
+        elif self.overlay == "FILE":
+            if self.file_cur < len(self.files):
+                return ("load", self.folder, self.file_cur, self.files[self.file_cur])
         elif self.view == "SETTINGS":
             if not self.dived:
                 self.dived = True
@@ -819,6 +1047,7 @@ class UI:
                 self.edit_start("sound", CAT["sound"][self.set_cur])
         else:
             self.flash("-" if self.view == "WAVE" else "view-only")
+        return None
 
     def btn(self, name):
         if name == "PUSH":
@@ -828,6 +1057,10 @@ class UI:
         if name == "BACK":
             if self.edit:
                 self.edit = None
+            elif self.menu:
+                self.menu = None
+            elif self.overlay == "FILE" and self.folder != "ROOT":
+                return self.open_root(self.folder)
             elif self.overlay == "SETUP" and self.setup[0] is not None:
                 self.setup[0] = None
             elif self.overlay:
@@ -837,7 +1070,7 @@ class UI:
             else:
                 self.view = "WAVE"
         elif name == "VIEW":
-            self.overlay, self.dived = None, False
+            self.overlay, self.menu, self.dived = None, None, False
             self.view = VIEWS[(VIEWS.index(self.view) + 1) % len(VIEWS)]
         elif name in ("SOUND<", "SOUND>"):
             n = (self.sound + (7 if name == "SOUND<" else 1)) % 8
@@ -847,7 +1080,13 @@ class UI:
             if self.overlay == "SETUP":
                 self.overlay = None
             else:
-                self.overlay, self.setup = "SETUP", [None, 0, 0]
-        else:                                 # FILE, A/B
-            self.flash("on the Mac (soon)")
+                self.overlay, self.menu, self.setup = "SETUP", None, [None, 0, 0]
+        elif name == "FILE":                  # opens on the sound's folder; again = the next
+            if self.overlay != "FILE":
+                return self.open_files()
+            i = FOLDERS.index(self.folder) if self.folder in FOLDERS else -1
+            return self.open_files(FOLDERS[(i + 1) % len(FOLDERS)])
+        elif name == "A/B":                   # the module's edited scene, as its A/B button
+            self.scene = "B" if self.scene == "A" else "A"
+            return ("scene", self.scene)
         return None

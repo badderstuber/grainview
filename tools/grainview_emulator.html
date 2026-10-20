@@ -585,7 +585,7 @@ function btn(n){
     else if(st.overlay==='FILE'&&st.folder!=='ROOT')openRoot(st.folder);
     else if(st.overlay==='SETUP'&&st.setup.g!=null)st.setup.g=null;
     else if(st.overlay)st.overlay=null; else if(st.dived)st.dived=false; else st.view='WAVE'; }
-  else if(n==='VIEW'){ st.overlay=null;st.dived=false;
+  else if(n==='VIEW'){ st.overlay=null;st.menu=null;st.dived=false;
     st.view=VIEWS[(VIEWS.indexOf(st.view)+1)%VIEWS.length]; }   // cycle (wraps)
   else if(n==='SCENE')selectScene(st.scene==='A'?'B':'A');
   else if(n==='SOUNDL')selectSound((st.sound+7)%8);

@@ -64,6 +64,18 @@ def main():
         "PROJECT_EXISTS, PRESET_EXISTS, PRESET_LOCKED = %s, %s, %s"
         % (h(PR.PROJECT_EXISTS), h(PR.PRESET_EXISTS), h(PR.PRESET_LOCKED)),
         "SLOTS = %d" % PR.SLOTS,
+        "# FILE (pico/mgfile.py): file lists, loads, presets / projects - one-halt calls",
+        "COUNTS, REC_LIST = %s, %s" % (h(L.COUNTS), h(L.REC_LIST)),
+        "LISTS = {%s}" % ", ".join("%d: %s" % (k, h(v)) for k, v in L.LISTS.items()),
+        "MAX_FILES = {%s}" % ", ".join("%d: 0x%X" % kv for kv in L.MAX_FILES.items()),
+        "EMPTY_MASK, AUDIO_LEN, LOST_OFF = %s, %s, 0x%X" % (h(L.EMPTY_MASK), h(L.AUDIO_LEN), L.LOST_OFF),
+        "IDLE_LO, IDLE_HI = %s, %s" % (h(L.IDLE_LO), h(L.IDLE_HI)),
+        "BROWSE_LOAD_FN, SET_FOLDER_FN, BROWSER_UI = %s, %s, %s"
+        % (h(L.BROWSE_LOAD_FN), h(L.SET_FOLDER_FN), h(L.BROWSER_UI)),
+        "LOAD_PRESET_FN, SAVE_PRESET_FN, LOCK_PRESET_FN, LOAD_PROJECT_FN = %s, %s, %s, %s"
+        % (h(PR.LOAD_PRESET_FN), h(PR.SAVE_PRESET_FN), h(PR.LOCK_PRESET_FN), h(PR.LOAD_PROJECT_FN)),
+        "SD_PROJECT, PROJECT_DIRTY, AUTOSAVE_TICK = %s, %s, %s"
+        % (h(PR.PROJECT), h(PR.PROJECT_DIRTY), h(PR.AUTOSAVE_TICK)),
         "SETTINGS_EVERY_MS = %d" % (G.SETTINGS_EVERY * 1000),
         "# (group, key, type, addr, off, root_off, n_options, min, max, step, dp)",
         "SETTINGS = (",

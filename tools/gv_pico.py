@@ -548,8 +548,40 @@ def ui_cases(snap):
         ("GvFw", setup(3, 3, 5)), ("GvEdit", setup(3, 3, 1, edit=0)),
         ("GvEditOn", setup(3, 3, 0, edit=1)),
         ("GvSet", setup(3, 3, 2, gv={"selPlays": 1, "touchOn": 0})))]
+    wavs = ["Kick %02d.wav" % i for i in range(1, 12)]
+    wavs[3] = "a_really_long_sample_name_in_the_list.wav"
+    many = ["Loop%03d.wav" % i for i in range(30)]
+    shelf = {"project": 2, "projects": [0, 1, 2, 7, 47], "presets": [0, 1, 2, 5, 47],
+             "locked": [1, 47], "preset": 1}
+
+    def files(folder, cur=0, names=None, store=None, sd=None, **f):   # FILE open there
+        def fn(s, d):
+            s["_file"] = {"folder": folder, "cur": cur, **({"files": names} if names is not None else {}), **f}
+            if store:
+                s["store"] = {**s.get("store", {}), **store}
+            if sd is not None:
+                s["sd_state"] = sd
+        return fn
+    out += [("file" + name, case(fn)) for name, fn in (
+        ("Root", files("ROOT", 1, counts={"project": 3, "Wavs": 11, "Recs": 0}, store=shelf)),
+        ("RootNoCounts", files("ROOT", 4, store=shelf)),
+        ("Wavs", files("Wavs", 3, wavs)), ("WavsUp", files("Wavs", -1, wavs)),
+        ("WavsEnd", files("Recs", 29, many)), ("WavsMid", files("project", 14, many)),
+        ("Empty", files("Wavs", -1, [])), ("Loading", files("Wavs", -1, [], ok=False)),
+        ("SdError", files("Wavs", -1, [], sd=3)),
+        ("Presets", files("PRESETS", 1, store=shelf)), ("PresetsEnd", files("PRESETS", 47, store=shelf)),
+        ("Projects", files("PROJECTS", 2, store=shelf)), ("ProjectsUp", files("PROJECTS", -1, store=shelf)),
+        ("MenuPreset", files("PRESETS", 2, store=shelf, menu=[1, None])),
+        ("MenuArmed", files("PRESETS", 2, store=shelf, menu=[1, 1])),
+        ("MenuLocked", files("PRESETS", 1, store=shelf, menu=[0, None])),
+        ("MenuEmpty", files("PRESETS", 3, store=shelf, menu=[0, None])),
+        ("MenuProjectCur", files("PROJECTS", 2, store=shelf, menu=[0, None])),
+        ("MenuProjectOpen", files("PROJECTS", 7, store=shelf, menu=[1, None])))]
+    out += [("flashLoading", case(lambda s, d: s.update(_flash=["Kick 03.wav", "LOADING"]))),
+            ("flashPlain", case(lambda s, d: s.update(_flash=["SD busy", None])))]
     off = {"mode": "swd", "connected": False, "error": "Multigrain off", "_sound": n}
-    return out + [("nolink", off), ("setupNolink", {**off, "_setup": [3, 3, 4]})]
+    return out + [("nolink", off), ("setupNolink", {**off, "_setup": [3, 3, 4]}),
+                  ("fileNolink", {**off, "_file": {"folder": "ROOT", "cur": 2}})]
 
 
 def ui_check(port, views, all_sounds=False, cases=False, k=3):
@@ -563,8 +595,9 @@ def ui_check(port, views, all_sounds=False, cases=False, k=3):
         time.sleep(0.1)
     if cases:
         live = json.loads(link.swd("S", timeout=5))
-        for name, snap in ui_cases(live):     # a SETUP case shows the overlay on any view
-            _ui_views(link, ["SETUP"] if "_setup" in snap else views, name + " ", k, snap)
+        for name, snap in ui_cases(live):     # an overlay case shows it on any view
+            _ui_views(link, ["SETUP"] if "_setup" in snap else ["FILE"] if "_file" in snap
+                      else views, name + " ", k, snap)
         return
     if not all_sounds:
         return _ui_views(link, views, "", k)
@@ -614,7 +647,7 @@ def _ui_views(link, views, tag, k, snap=None):
 def main():
     ap = argparse.ArgumentParser(description="GRAINVIEW Pico screen helper")
     ap.add_argument("cmd", choices=["deploy", "quit", "keys", "swd", "poll", "ui"])
-    ap.add_argument("views", nargs="*", help="ui: views to check (default: all 4 + SETUP)")
+    ap.add_argument("views", nargs="*", help="ui: views to check (default: all 4 + SETUP + FILE)")
     ap.add_argument("--all-sounds", action="store_true", help="ui: check sounds 1-8")
     ap.add_argument("--cases", action="store_true", help="ui: check made-up edge cases")
     ap.add_argument("--port", help="serial port (default: first Raspberry Pi board)")
@@ -640,7 +673,8 @@ def main():
     elif a.cmd == "poll":
         poll_check(port, a.khz)
     elif a.cmd == "ui":
-        ui_check(port, a.views or ["WAVE", "PARAM", "MOD", "SETTINGS", "SETUP"], a.all_sounds, a.cases)
+        ui_check(port, a.views or ["WAVE", "PARAM", "MOD", "SETTINGS", "SETUP", "FILE"], a.all_sounds,
+                 a.cases)
     elif a.cmd == "keys":
         link = PicoLink(port)
         q = link.subscribe()

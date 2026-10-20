@@ -180,8 +180,9 @@ web app over WiFi as an optional big-screen view.)
 - [ ] On-screen UI: live mirror + SD browser + load-to-slot + patch mgmt. **Started 2026-10-20**
       in MicroPython framebuf (not LVGL): `pico/gv_ui.py` = a pixel-exact port of the
       emulator; WAVE (+ grain dots) / PARAM / MOD / SETTINGS / knob hero / SETUP overlay
-      (GRAINVIEW settings editable, Sel plays) + SOUND‹› done, checked by `gv_pico.py ui`.
-      Left: FILE browser + load, A/B.
+      (GRAINVIEW settings editable, Sel plays) + SOUND‹› + FILE (browse, WAV load, preset /
+      project menus; `pico/mgfile.py`, hardware-tested 2026-10-21) done, checked by
+      `gv_pico.py ui`. A/B done 2026-10-21: the UI is complete (all the emulator has).
 - [ ] **Then** hardware: eurorack PCB + panel (KiCad), ~8 HP, bus power → 3.3 V,
       VTREF sense only (no back-power), SWD header to ribbon.
 - [ ] Optional Pico W: serve the Phase-2 web app/API over WiFi too.

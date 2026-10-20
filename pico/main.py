@@ -49,7 +49,8 @@ oled = SSD1327(spi, dc=Pin(pins.SCR_DC, Pin.OUT, value=0),
 oled.text("GRAINVIEW", 28, 60, 15)
 oled.show()
 
-# --- encoder: Gray-code decoder in a hard IRQ, one step per detent (rest A=B=1) ---
+# --- encoder: Gray-code decoder in a hard IRQ, one step per detent (rest A=B=1); the
+# table's sign is anticlockwise-positive with this wiring, flipped below ---
 enc_a, enc_b = inp(pins.ENC_A), inp(pins.ENC_B)
 TR = array.array('b', (0, -1, 1, 0, 1, 0, 0, -1, -1, 0, 0, 1, 0, 1, -1, 0))
 es = array.array('i', [(enc_a() << 1) | enc_b(), 0, 0])     # prev state, accumulator, steps
@@ -60,11 +61,11 @@ def enc_irq(_):
     if cur != prev:
         es[1] += TR[(prev << 2) | cur]
         es[0] = cur
-        if cur == 3:
+        if cur == 3:                          # clockwise = +1 (down / next / up a value)
             if es[1] >= 2:
-                es[2] += 1
-            elif es[1] <= -2:
                 es[2] -= 1
+            elif es[1] <= -2:
+                es[2] += 1
             es[1] = 0
 
 for p in (enc_a, enc_b):
@@ -90,7 +91,8 @@ WRITES = (0x77, 0x62, 0x68, 0x75, 0x69, 0x47)  # w b h u i G: the next 'S' polls
 dbg = [None]                                  # the SWD object
 mg = {"poll": None, "auto": True, "stale": True, "err": "connecting", "at": 0, "next": 0,
       "full_at": None,                        # last poll of all 8 sounds (else: the focused one)
-      "mac_at": None}                         # last 'S': while the Mac reads, poll all 8
+      "mac_at": None,                         # last 'S': while the Mac reads, poll all 8
+      "fix": None}                            # a load's 2nd half, due later (mgfile.fix)
 vtref = machine.ADC(pins.VTREF)
 
 def mg_link(khz=8000):
@@ -117,6 +119,8 @@ def mg_poll(full=False):
             if vtref.read_u16() < VTREF_MIN:
                 raise RuntimeError("Multigrain off")
             mg_link(dbg[0].khz if dbg[0] else 8000)
+        if mg["fix"] is not None:
+            mg_fix()
         mac = mg["mac_at"] is not None and time.ticks_diff(now, mg["mac_at"]) < 1000
         full = full or mac
         mg["poll"].read(focus=not full)
@@ -136,11 +140,14 @@ def mg_poll(full=False):
         gc.collect()                          # garbage), so the heap stays in one piece
         gv["perf"][7] += time.ticks_diff(time.ticks_us(), t)
 
-def mg_json():
-    """The latest poll as JSON pieces (see Poller.json)."""
+def mg_json(file=None):
+    """The latest poll as JSON pieces (see Poller.json), + "_file" if given."""
     p = mg["poll"]
     if mg["err"] is None and p is not None and p.snap is not None:
-        return p.json()
+        js = p.json()
+        if file is None:
+            return js
+        return js[:-1] + [js[-1][:-1] + b', "_file": ' + json.dumps(file).encode() + b"}"]
     return [json.dumps({"mode": "swd", "connected": False, "error": mg["err"]}).encode()]
 
 def mg_select(n):
@@ -152,6 +159,15 @@ def mg_select(n):
     s.write8(M.CUR_SOUND, n)
     s.write8(M.STATE + 0x11, s.read_block8(M.STATE + 0x08, 1)[0])
     mg_poll()                                 # show it at once
+
+def mg_scene(sc):
+    """Edited scene -> "A"/"B", no halt: grainview_server.set_scene's two writes (the setter
+    FUN_080114e4's stores without its notify; panel A/B + knob LEDs follow)."""
+    import mg_map as M
+    s = dbg[0]
+    s.write8(M.EDIT_SCENE, 1 if sc == "B" else 0)
+    s.write8(M.STATE + 0x30, 0)
+    mg_poll()
 
 def mg_play(timeout_ms=500):
     """Playback -> the selected sound: mg_load.post_event_nohalt(EV_PLAY_SELECTED). The
@@ -173,6 +189,45 @@ def mg_play(timeout_ms=500):
             break
         time.sleep_ms(1)
     raise RuntimeError("play: try again")
+
+def mg_do(act):
+    """A UI action (gv_ui.UI.btn) on the module -> its result, or raises with the reason."""
+    s, k = dbg[0], act[0]
+    if mg["err"] is not None or s is None:
+        raise RuntimeError("NO MODULE LINK")
+    if k == "select":
+        mg_select(act[1])
+        if act[2]:                            # SETUP > GRAINVIEW > Sel plays
+            mg_play()
+        return None
+    if k == "scene":
+        mg_scene(act[1])
+        return None
+    import mgfile as F
+    if k == "root":
+        return F.counts(s)
+    if k == "files":
+        return F.files(s, act[1] or None)
+    mg["stale"] = True
+    if k == "load":
+        mg["fix"] = F.load(s, act[1] or None, act[2])
+    elif act[1] == "preset":
+        F.preset(s, act[2], act[3])
+    else:
+        F.project(s, act[2], act[3])
+    return None
+
+def mg_fix():
+    """An empty sound loaded from another folder got reset to file 0: once that's done,
+    load the file asked for (mgfile.fix; checked at each poll)."""
+    import mgfile as F
+    try:
+        if F.fix(dbg[0], mg["fix"]):
+            mg["fix"] = None
+    except Exception as e:
+        mg["fix"] = None
+        if gv["ui"] is not None:
+            gv["ui"].flash(str(e) or type(e).__name__)
 
 # --- the Pico's own UI (gv_ui.py) ---
 MAC_MS = 3000                                 # no Mac frame for this long -> our own UI
@@ -245,14 +300,29 @@ def ui_key(name):
     if not ui_own() or gv["ui"] is None:
         return
     act = gv["ui"].btn(name)
-    if act and act[0] == "select":
-        try:
-            mg_select(act[1])
-            if act[2]:                        # SETUP > GRAINVIEW > Sel plays
-                mg_play()
-        except Exception as e:
-            gv["ui"].flash(str(e) or type(e).__name__)
+    if act:
+        ui_act(act)
     ui_draw()
+
+def ui_act(act):
+    ui = gv["ui"]
+    if act[0] == "files":
+        ui_draw()                             # "loading list..." while the names are read
+    try:
+        res = mg_do(act)
+    except Exception as e:
+        ui.done(act, err=str(e) or type(e).__name__)
+    else:
+        ui.done(act, res)
+
+def ui_file_live():
+    """FILE as it opens on the selected sound's folder (the 'v' FILE check), else the root."""
+    import mgfile as F
+    try:
+        folder, cur, names = F.files(dbg[0])
+    except Exception:
+        return {"folder": "ROOT", "cur": 0}
+    return {"folder": folder, "files": names, "cur": max(0, min(len(names) - 1, cur)) if names else -1}
 
 def ui_enc(n):
     if ui_own() and gv["ui"] is not None:
@@ -267,7 +337,8 @@ def swd_op(op, body):
     G (reg u8, word)...      x (release the pins, stop polling until the next c)
     S -> the latest poll as JSON (polls first if a write came in or it's > FRESH_MS old)
     v [view] -> our UI rendered from the latest poll (8192 bytes) + that poll as JSON
-    (view "SETUP" = the SETUP overlay; a snapshot's "_setup" opens a group / row in it)
+    (view "SETUP" = the SETUP overlay; a snapshot's "_setup" opens a group / row in it;
+    view "FILE" = FILE on the selected sound's folder, read from the module, "_file" in the JSON)
     v snapshot JSON (+ "_view") -> just the frame, for that snapshot (tests; the panel
                  stays live; the JSON is parsed in place: no copy from a busy heap)
     P -> UI / poll timing since the last P, as JSON
@@ -310,13 +381,16 @@ def swd_op(op, body):
         snap = json.loads(body) if given else dict(ui_snap())
         view = snap.pop("_view", None) if given else bytes(body).decode()
         del body
-        if view == "SETUP":                   # the overlay (on the current view)
+        if view == "SETUP":                   # the overlays (on the current view)
             snap.setdefault("_setup", [None, 0, 0])
+        elif view == "FILE":
+            if "_file" not in snap:
+                snap["_file"] = {"folder": "ROOT", "cur": 0} if given else ui_file_live()
         elif view:
             gv["ui"].view = view
         snap.setdefault("_steps", [0])
         gv["ui"].render(snap)
-        out = [bytes(gv["ui"].buf)] + ([] if given else mg_json())
+        out = [bytes(gv["ui"].buf)] + ([] if given else mg_json(snap.get("_file")))
         ui_draw()
         return out
     s = dbg[0]
