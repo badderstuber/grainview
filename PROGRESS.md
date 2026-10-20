@@ -5,9 +5,37 @@ Multigrain** (3U granular sampler) — it's hard to use without a screen and the
 audio-file workflow is confusing. This file is the single place to pick the
 project back up if I lose the chat session.
 
-_Last updated: 2026-10-20 (late)._
+_Last updated: 2026-10-21._
 
 ---
+
+## Update 2026-10-21 — SETUP overlay on the Pico ✅ (+ Sel plays)
+
+- **SETUP** (the emulator's vSetup): SETUP opens the groups (MODULE 11 / PRESET 4 / SAMPLE
+  soon / GRAINVIEW 6), PUSH opens one, then the label ...... value list. SETUP again,
+  VIEW or BACK-at-the-groups close it; BACK in a list → the groups.
+  - MODULE / PRESET: values from the poll's `settings`; PUSH = "read-only (live)", info rows
+    "read-only", unmapped "-" → "not mapped yet" (same as SETTINGS).
+  - **GRAINVIEW is editable** (the emulator's push / turn / push edit: value inverted, status
+    "PUSH OK", BACK or any other button cancels it): **Sel plays**, **Knob view**; Wave
+    style / Font show the Pico's only choices (B / Spleen); Link ("SWD", "SWD X" when
+    unlinked) and Firmware are info. Saved to the Pico's flash as `gv_cfg.json` and loaded
+    at boot.
+- **Sel plays works on the Pico:** SOUND‹› then also switches playback (`main.mg_play` =
+  mg_load.post_event_nohalt(EV_PLAY_SELECTED): write the events word when it reads 0, wait
+  for the engine to take it). `EVENTS` / `EV_PLAY_SELECTED` are now generated into `mg_map.py`.
+- **Parity:** new test hooks `_setup` ([group, group cursor, row]), `_edit`, `_gv` on both
+  sides; `gv_pico.py ui` checks view `SETUP` by default (now 5 views), `--cases` adds 17
+  SETUP cases (groups, a module list top / middle / scrolled end, unmapped, a num + an enum
+  edit, GRAINVIEW incl. changed settings, unlinked).
+- **Checked on the Pico:** `gv_pico.py ui` live 5 views MATCH, `--cases` **222 frames
+  MATCH** (41 old cases x 5 views + 17 SETUP cases); poll ~15 ms, 165 KB free. Offline
+  first (gv_ui.py under CPython with a framebuf shim vs gv_render.js: same result, and
+  button/encoder sequences behave as the emulator's) while the Pico was hung on USB - a
+  replug fixed it.
+- **On the panel (Leo, 2026-10-21):** Sel plays ON → SOUND‹› moves the yellow (playing)
+  LED to the selected sound on the Multigrain (audio not listened to).
+- Not ported yet: FILE browser (+ loading), A/B scene.
 
 ## Update 2026-10-21 (early) — knob touch + SETTINGS on the Pico ✅
 

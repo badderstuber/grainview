@@ -54,6 +54,8 @@ def main():
         "CURSORS = %s" % h(L.CURSORS),
         "CUR_SOUND, PLAYING, EDIT_SCENE = %s, %s, %s" % (h(L.CUR_SOUND), h(L.PLAYING), h(P.EDIT_SCENE)),
         "STATE = %s                 # engine/UI state block (mg_load.select_nohalt)" % h(L.STATE),
+        "EVENTS, EV_PLAY_SELECTED = %s, %d   # engine event bits (mg_load.post_event_nohalt)"
+        % (h(L.EVENTS), L.EV_PLAY_SELECTED),
         "SD_STATE, SIZE_MODE, SYNC, CLOCK_PERIOD = %s, %s, %s, %s"
         % (h(L.SD_STATE), h(G.G_SIZE_MODE), h(G.G_SYNC), h(G.G_CLOCK_PERIOD)),
         "LIVE = %s" % "(%s)" % ", ".join("(%r, %s)" % (k, h(P.LIVE[k])) for k in G.NAMES),

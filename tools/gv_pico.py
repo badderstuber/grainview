@@ -527,7 +527,29 @@ def ui_cases(snap):
         ("QuantOdd", settings(6, quantizer={"notes": notes(2, 3), "root": 2})),
         ("Chrom", settings(6, quantizer={"notes": notes(*range(12)), "root": 5})),
         ("Unmapped", settings(3, link_sp=None, choke=None)))]
-    return out + [("nolink", {"connected": False, "error": "Multigrain off", "_sound": n})]
+
+    def setup(g, gc, cur=0, edit=None, gv=None, **vals):   # SETUP overlay open there
+        def fn(s, d):
+            s["_setup"] = [g, gc, cur]
+            if edit is not None:
+                s["_edit"] = edit
+            if gv:
+                s["_gv"] = gv
+            for grp, kv in vals.items():
+                s["settings"][grp].update(kv)
+        return fn
+    out += [("setup" + name, case(fn)) for name, fn in (
+        ("Groups", setup(None, 0)), ("Preset", setup(None, 1)), ("Soon", setup(None, 2)),
+        ("Gv", setup(None, 3)),
+        ("Mod", setup(0, 0)), ("ModMid", setup(0, 0, 5)), ("ModEnd", setup(0, 0, 10)),
+        ("ModUnmapped", setup(0, 0, 1, module={"next_input": None, "gate_delay": None})),
+        ("ModEdit", setup(0, 0, 3, edit=2.5)),
+        ("Pre", setup(1, 1, 2)), ("GvTop", setup(3, 3)), ("GvLink", setup(3, 3, 4)),
+        ("GvFw", setup(3, 3, 5)), ("GvEdit", setup(3, 3, 1, edit=0)),
+        ("GvEditOn", setup(3, 3, 0, edit=1)),
+        ("GvSet", setup(3, 3, 2, gv={"selPlays": 1, "touchOn": 0})))]
+    off = {"mode": "swd", "connected": False, "error": "Multigrain off", "_sound": n}
+    return out + [("nolink", off), ("setupNolink", {**off, "_setup": [3, 3, 4]})]
 
 
 def ui_check(port, views, all_sounds=False, cases=False, k=3):
@@ -541,8 +563,8 @@ def ui_check(port, views, all_sounds=False, cases=False, k=3):
         time.sleep(0.1)
     if cases:
         live = json.loads(link.swd("S", timeout=5))
-        for name, snap in ui_cases(live):
-            _ui_views(link, views, name + " ", k, snap)
+        for name, snap in ui_cases(live):     # a SETUP case shows the overlay on any view
+            _ui_views(link, ["SETUP"] if "_setup" in snap else views, name + " ", k, snap)
         return
     if not all_sounds:
         return _ui_views(link, views, "", k)
@@ -592,7 +614,7 @@ def _ui_views(link, views, tag, k, snap=None):
 def main():
     ap = argparse.ArgumentParser(description="GRAINVIEW Pico screen helper")
     ap.add_argument("cmd", choices=["deploy", "quit", "keys", "swd", "poll", "ui"])
-    ap.add_argument("views", nargs="*", help="ui: views to check (default: all 4)")
+    ap.add_argument("views", nargs="*", help="ui: views to check (default: all 4 + SETUP)")
     ap.add_argument("--all-sounds", action="store_true", help="ui: check sounds 1-8")
     ap.add_argument("--cases", action="store_true", help="ui: check made-up edge cases")
     ap.add_argument("--port", help="serial port (default: first Raspberry Pi board)")
@@ -618,7 +640,7 @@ def main():
     elif a.cmd == "poll":
         poll_check(port, a.khz)
     elif a.cmd == "ui":
-        ui_check(port, a.views or ["WAVE", "PARAM", "MOD", "SETTINGS"], a.all_sounds, a.cases)
+        ui_check(port, a.views or ["WAVE", "PARAM", "MOD", "SETTINGS", "SETUP"], a.all_sounds, a.cases)
     elif a.cmd == "keys":
         link = PicoLink(port)
         q = link.subscribe()

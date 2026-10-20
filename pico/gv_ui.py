@@ -3,18 +3,23 @@
 # match pixel for pixel - check with: tools/venv/bin/python tools/gv_pico.py ui PARAM
 # Ported so far: header, status line, WAVE (waveform + animated grain dots, style B with
 # the knob readout), PARAM, MOD, SETTINGS (browse; live = read-only, as the emulator), the
-# knob-touch hero, the NO MODULE LINK / flash boxes. Still Mac-only: FILE, SETUP, A/B.
+# SETUP overlay (MODULE / PRESET read-only live, GRAINVIEW's own settings editable, kept in
+# CFG on flash), the knob-touch hero, the NO MODULE LINK / flash boxes. Still Mac-only:
+# FILE, A/B.
 #
 #   ui = UI()
 #   ui.render(snap)                     # into ui.buf (128x128 GS4, the SSD1327's layout)
 #   ui.update(snap)                     # new data only; the next animate() draws it
 #   ui.animate()                        # WAVE: next grain frame (~30 fps) -> the rows it
 #                                       # changed (r0, n), or None
-#   act = ui.btn("SOUND>")              # -> None or ("select", n) for main.py to do
+#   act = ui.btn("SOUND>")              # -> None or ("select", n, play) for main.py to do
 # A snapshot with "_steps" (clock values, ms) + "_rand" (random numbers) renders once per
 # step with those - the same script the emulator runs in tools/gv_render.js (tests); also
 # "_touch": [knob, mod source or null], "_dived", "_setCur" set that UI state for the test;
-# "_prev": earlier snapshots fed through the knob-touch detection first (as polls).
+# "_setup": [group or null, group cursor, row] opens SETUP, "_edit": the cursor row's value
+# being edited; "_gv": {"selPlays", "touchOn"} (else the defaults); "_prev": earlier
+# snapshots fed through the knob-touch detection first (as polls).
+import json
 import framebuf
 import math
 import micropython
@@ -57,6 +62,12 @@ SCALES = (                                    # the emulator's SCALES: short, lo
 # grain dots (the emulator's grainsStep / grains, see its notes): simulated from the
 # knobs, one dot per live grain. SCAN_STEP + the sample length are placeholders there too.
 GRAIN_MIN_MS, GRAIN_MAX, GRAIN_PX, GRAIN_SPREAD, SCAN_STEP = 80, 160, 2, 0.02, 0.05
+# SETUP overlay: the emulator's SETUP_GROUPS (None = not there yet); GRAINVIEW's own
+# settings live in CFG (the emulator: localStorage)
+SETUP_GROUPS = (("MODULE", "module"), ("PRESET", "preset"), ("SAMPLE", None), ("GRAINVIEW", "gv"))
+CFG = "gv_cfg.json"
+ONOFF = ("OFF", "ON")
+FIRMWARE = "1.4.8.0"
 
 
 def fmt(v, bip):                              # normalized: unipolar .42, bipolar +.42
@@ -195,6 +206,20 @@ class UI:
         self.touch_on, self.touch, self.tb = True, None, None   # (knob, src, ms) / baseline
         self.touch_drawn = False
         self.dived, self.set_cur = False, 0   # SETTINGS: cursor shown / row
+        self.overlay, self.setup = None, [None, 0, 0]   # "SETUP" / [group, group cursor, row]
+        self.edit = None                      # [group, entry, value, value before]
+        self.sel_plays = False                # SOUND<> also switches playback
+        self.load_cfg()
+        # SETUP > GRAINVIEW (the emulator's GV_SETTINGS; one wave style + font set here)
+        self.gv = (
+            {"label": "Sel plays", "type": "enum", "options": ONOFF,
+             "get": lambda: int(self.sel_plays), "set": lambda v: setattr(self, "sel_plays", bool(v))},
+            {"label": "Knob view", "type": "enum", "options": ONOFF,
+             "get": lambda: int(self.touch_on), "set": lambda v: setattr(self, "touch_on", bool(v))},
+            {"label": "Wave style", "type": "enum", "options": ("B",), "get": lambda: 0},
+            {"label": "Font", "type": "enum", "options": ("Spleen",), "get": lambda: 0},
+            {"label": "Link", "type": "info", "get": self.link_text},
+            {"label": "Firmware", "type": "info", "get": lambda: FIRMWARE})
         self.testing = False
 
     # ---- data ----
@@ -436,13 +461,29 @@ class UI:
                     t = fmt(v, True)
                     d.text(T, t, cx + ((cw - T.width(t)) >> 1), y, 15)
 
-    # ---- SETTINGS (the focused sound's; catalogue gv_cat.py) ----
-    def sget(self, e):
-        s = self.snd()
-        return s["settings"].get(e["key"]) if s and s.get("settings") else None
+    # ---- SETTINGS (the focused sound's) + SETUP (catalogue gv_cat.py; GRAINVIEW: self.gv) ----
+    def items(self, g):
+        return self.gv if g == "gv" else CAT[g]
 
-    def s_list(self, items, cur, top, bot, show_cur):
-        """label ...... value rows, cursor row inverted, scroll mark if they don't fit."""
+    def sget(self, g, e):                     # None = not mapped on the live module (yet)
+        if g == "gv":
+            return e["get"]()
+        if g == "sound":
+            s = self.snd()
+            src = s and s.get("settings")
+        else:
+            src = self.snap and self.snap.get("settings") and self.snap["settings"].get(g)
+        return src.get(e["key"]) if src else None
+
+    def link_text(self):
+        s = self.snap
+        if not s:
+            return "-"
+        return (s.get("mode") or "swd").upper() + ("" if s.get("connected") else " X")
+
+    def s_list(self, g, items, cur, top, bot, show_cur):
+        """label ...... value rows, cursor row inverted (just its value while editing),
+        scroll mark if they don't fit."""
         d, M = self.d, self.M
         rh = M.lh + 2
         rows, n = (bot - top) // rh, len(items)
@@ -455,13 +496,19 @@ class UI:
                 break
             e, y = items[i], top + r * rh
             on = show_cur and i == cur
-            v = self.sget(e)
-            by = y + 1 + M.asc
-            if on:
+            ed = on and self.edit is not None
+            v = self.edit[2] if ed else self.sget(g, e)
+            vt, by = stext(e, v), y + 1 + M.asc
+            if on and not ed:
                 d.rect(0, y, xr + 2, rh, 15)
-            d.text(M, e["label"], 2, by, 0 if on else 11)
-            d.text_r(M, stext(e, v), xr, by,
-                     0 if on else 5 if v is None else 8 if e["type"] == "info" else 15)
+            d.text(M, e["label"], 2, by, 0 if on and not ed else 15 if ed else 11)
+            if ed:
+                vw = M.width(vt)
+                d.rect(xr - vw - 2, y, vw + 4, rh, 15)
+                d.text_r(M, vt, xr, by, 0)
+            else:
+                d.text_r(M, vt, xr, by,
+                         0 if on else 5 if v is None else 8 if e["type"] == "info" else 15)
         if sb:
             th = max(4, jround((bot - top) * rows / n))
             ty = top + jround((bot - top - th) * first / (n - rows))
@@ -472,17 +519,74 @@ class UI:
         items = CAT["sound"]
         e = items[self.set_cur] if self.set_cur < len(items) else None
         top = self.header()
-        bot = self.status("SETTINGS", e.get("panel", "") if self.dived and e else "PUSH EDIT")
-        self.s_list(items, self.set_cur, top, bot, self.dived)
+        bot = self.status("SETTINGS", "PUSH OK" if self.edit else
+                          e.get("panel", "") if self.dived and e else "PUSH EDIT")
+        self.s_list("sound", items, self.set_cur, top, bot, self.dived)
 
-    def edit_start(self, e):                  # live module: nothing is editable yet
-        v = self.sget(e)
+    def v_setup(self):
+        """SETUP overlay: the groups, then a group's list."""
+        d, T, M = self.d, self.T, self.M
+        top = self.header()
+        g, gc, cur = self.setup
+        if g is None:
+            bot = self.status("SETUP", "PUSH OPEN")
+            rh = M.lh + 2
+            for i, (name, grp) in enumerate(SETUP_GROUPS):
+                y, on = top + i * rh, i == gc
+                by = y + 1 + M.asc
+                tag = str(len(self.items(grp))) if grp else "soon"
+                if on:
+                    d.rect(0, y, W, rh, 15)
+                d.text(M, name, 2, by, 0 if on else 12 if grp else 5)
+                d.text_r(T, tag, W - 2, by - (M.asc - T.asc), 0 if on else 8)
+            return
+        name, grp = SETUP_GROUPS[g]
+        items = self.items(grp)
+        e = items[cur] if cur < len(items) else None
+        bot = self.status("SETUP>" + name, "PUSH OK" if self.edit else
+                          e and e.get("panel") or "PUSH EDIT")
+        self.s_list(grp, items, cur, top, bot, True)
+
+    def edit_start(self, g, e):               # live module: only GRAINVIEW's own are editable
+        v = self.sget(g, e)
         if e["type"] == "info":
             self.flash("read-only")
         elif v is None:
             self.flash("not mapped yet")
-        elif self.snap and self.snap.get("mode") != "mock":
+        elif g != "gv" and self.snap and self.snap.get("mode") != "mock":
             self.flash("read-only (live)")
+        elif e["type"] in ("enum", "num"):
+            self.edit = [g, e, v, v]
+
+    def edit_step(self, n):
+        e, v = self.edit[1], self.edit[2]
+        if e["type"] == "enum":
+            v = max(0, min(len(e["options"]) - 1, v + n))
+        else:
+            v = round(max(e["min"], min(e["max"], v + n * e["step"])), e["dp"])
+        self.edit[2] = v
+
+    def edit_commit(self):
+        g, e, v, v0 = self.edit
+        self.edit = None
+        if v != v0 and g == "gv" and "set" in e:
+            e["set"](v)
+            self.save_cfg()
+
+    def load_cfg(self):
+        try:
+            with open(CFG) as f:
+                c = json.load(f)
+            self.sel_plays, self.touch_on = bool(c.get("selPlays")), c.get("touchOn", 1) != 0
+        except (OSError, ValueError):
+            pass
+
+    def save_cfg(self):
+        try:
+            with open(CFG, "w") as f:
+                json.dump({"selPlays": int(self.sel_plays), "touchOn": int(self.touch_on)}, f)
+        except OSError as x:
+            self.flash("not saved: " + str(x))
 
     # ---- knob touch ----
     def detect_touch(self):
@@ -530,7 +634,7 @@ class UI:
         return self.touch[0] if self.touch_recent() and not self.touch[1] else None
 
     def touch_active(self):                   # hero instead of the view?
-        if not self.touch_recent() or self.view == "SETTINGS" and self.dived:
+        if not self.touch_recent() or self.overlay or self.view == "SETTINGS" and self.dived:
             return False
         return self.view != "WAVE"            # WAVE (style B): the status-line readout
 
@@ -583,12 +687,14 @@ class UI:
         if snap and snap.get("_steps"):
             return self.render_scripted(snap)
         self.update(snap)
-        if self.view == "WAVE" and not self.touch_active():
+        if self.view == "WAVE" and not self.overlay and not self.touch_active():
             self.v_wave()
         else:
             self.bg_key = None
             self.fb.fill(0)
-            if self.touch_active():
+            if self.overlay == "SETUP":
+                self.v_setup()
+            elif self.touch_active():
                 self.v_touch()
             elif self.view == "PARAM":
                 self.v_param()
@@ -617,7 +723,7 @@ class UI:
     def animating(self):
         """WAVE with dots alive or being launched (else frames wouldn't change)."""
         s, snap = self.snd(), self.snap
-        return (self.view == "WAVE" and self.bg_key is not None
+        return (self.view == "WAVE" and not self.overlay and self.bg_key is not None
                 and (bool(self.g_list) or bool(s and s["file"] and snap.get("playing") == self.sound)))
 
     def animate(self):
@@ -633,7 +739,16 @@ class UI:
         """Tests: one render per snap["_steps"] clock value, randoms from snap["_rand"]."""
         r = list(snap.get("_rand", ()))
         clock, rand = self.clock, self.rand
-        kept = self.touch, self.tb, self.dived, self.set_cur
+        kept = (self.touch, self.tb, self.dived, self.set_cur, self.overlay, self.setup, self.edit,
+                self.sel_plays, self.touch_on)
+        gv = snap.get("_gv") or {}            # GRAINVIEW's own settings: the defaults unless given
+        self.sel_plays, self.touch_on = bool(gv.get("selPlays")), gv.get("touchOn", 1) != 0
+        su = snap.get("_setup")
+        self.overlay, self.setup = ("SETUP", list(su)) if su else (None, [None, 0, 0])
+        self.edit = None
+        if su and su[0] is not None and "_edit" in snap:
+            grp = SETUP_GROUPS[su[0]][1]
+            self.edit = [grp, self.items(grp)[su[2]], snap["_edit"], None]
         self.rand = lambda: r.pop(0)
         self.g_list, self.g_acc, self.g_t, self.g_key, self.g_ph = [], 0, None, None, 0
         self.bg_key, self.testing = None, True
@@ -652,7 +767,8 @@ class UI:
                 self.render(live)
         finally:
             self.clock, self.rand, self.testing = clock, rand, False
-            self.touch, self.tb, self.dived, self.set_cur = kept
+            (self.touch, self.tb, self.dived, self.set_cur, self.overlay, self.setup, self.edit,
+             self.sel_plays, self.touch_on) = kept
             self.g_list, self.g_acc, self.g_t, self.g_key, self.g_ph = [], 0, None, None, 0
             self.bg_key = None
 
@@ -671,32 +787,67 @@ class UI:
         return False
 
     def enc(self, n):
-        if self.view == "SETTINGS" and self.dived:
+        su = self.setup
+        if self.edit:
+            self.edit_step(n)
+        elif self.overlay == "SETUP" and su[0] is None:
+            su[1] = max(0, min(len(SETUP_GROUPS) - 1, su[1] + n))
+        elif self.overlay == "SETUP":
+            su[2] = max(0, min(len(self.items(SETUP_GROUPS[su[0]][1])) - 1, su[2] + n))
+        elif self.view == "SETTINGS" and self.dived:
             self.set_cur = max(0, min(len(CAT["sound"]) - 1, self.set_cur + n))
         else:                                 # page the views (clamped, as the emulator)
             i = VIEWS.index(self.view) + n
             self.view = VIEWS[max(0, min(len(VIEWS) - 1, i))]
 
-    def btn(self, name):
-        if name == "VIEW":
-            self.dived = False
-            self.view = VIEWS[(VIEWS.index(self.view) + 1) % len(VIEWS)]
-        elif name == "BACK":
-            if self.dived:
-                self.dived = False
+    def push(self):
+        su = self.setup
+        if self.edit:
+            self.edit_commit()
+        elif self.overlay == "SETUP" and su[0] is None:
+            if SETUP_GROUPS[su[1]][1]:
+                su[0], su[2] = su[1], 0
             else:
-                self.view = "WAVE"
-        elif name in ("SOUND<", "SOUND>"):
-            n = (self.sound + (7 if name == "SOUND<" else 1)) % 8
-            self.sound = n
-            return ("select", n)
-        elif name == "PUSH" and self.view == "SETTINGS":
+                self.flash("coming soon")
+        elif self.overlay == "SETUP":
+            g = SETUP_GROUPS[su[0]][1]
+            self.edit_start(g, self.items(g)[su[2]])
+        elif self.view == "SETTINGS":
             if not self.dived:
                 self.dived = True
             else:
-                self.edit_start(CAT["sound"][self.set_cur])
-        elif name == "PUSH":
+                self.edit_start("sound", CAT["sound"][self.set_cur])
+        else:
             self.flash("-" if self.view == "WAVE" else "view-only")
-        else:                                 # FILE, A/B, SETUP
+
+    def btn(self, name):
+        if name == "PUSH":
+            return self.push()
+        if name not in ("BACK", "A/B"):       # leaving = cancel an edit
+            self.edit = None
+        if name == "BACK":
+            if self.edit:
+                self.edit = None
+            elif self.overlay == "SETUP" and self.setup[0] is not None:
+                self.setup[0] = None
+            elif self.overlay:
+                self.overlay = None
+            elif self.dived:
+                self.dived = False
+            else:
+                self.view = "WAVE"
+        elif name == "VIEW":
+            self.overlay, self.dived = None, False
+            self.view = VIEWS[(VIEWS.index(self.view) + 1) % len(VIEWS)]
+        elif name in ("SOUND<", "SOUND>"):
+            n = (self.sound + (7 if name == "SOUND<" else 1)) % 8
+            self.sound = n
+            return ("select", n, self.sel_plays)
+        elif name == "SETUP":                 # SETUP again = close
+            if self.overlay == "SETUP":
+                self.overlay = None
+            else:
+                self.overlay, self.setup = "SETUP", [None, 0, 0]
+        else:                                 # FILE, A/B
             self.flash("on the Mac (soon)")
         return None

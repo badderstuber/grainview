@@ -6,6 +6,8 @@
 // A snapshot with "_steps" (clock values, ms) + "_rand" (random numbers) renders once per
 // step with those (grain dots), the last frame is the output - as pico/gv_ui.py does.
 // "_touch": [knob, mod source or null], "_dived", "_setCur": that UI state for the test;
+// "_setup": [group or null, group cursor, row] opens SETUP (view "SETUP": the groups), "_edit":
+// the cursor row's value being edited, "_gv": {selPlays, touchOn} (else the defaults);
 // "_prev": earlier snapshots fed through detectTouch first (as the poll does).
 // Used by: tools/venv/bin/python tools/gv_pico.py ui VIEW
 const fs = require('fs'), path = require('path'), vm = require('vm');
@@ -27,28 +29,38 @@ for (const f of ['fonts/gv_fonts.js', 'gv_draw.js', 'gv_units.js'])
 const html = fs.readFileSync(path.join(dir, 'grainview_emulator.html'), 'utf8');
 const script = html.slice(html.lastIndexOf('<script>') + 8, html.lastIndexOf('</script>'));
 vm.runInContext(script + `
-;globalThis.__gv = {set M(v) { M_ = v; }, set CAT(v) { CAT = v; }, st, fb, box, touchActive, vTouch, detectTouch,
-  views: {WAVE: vWave, PARAM: vParm, MOD: vMod, SETTINGS: vSet}};`,
+;globalThis.__gv = {set M(v) { M_ = v; }, set CAT(v) { CAT = v; }, st, fb, box, touchActive, vTouch, detectTouch, vSetup,
+  SETUP_GROUPS, gItems, views: {WAVE: vWave, PARAM: vParm, MOD: vMod, SETTINGS: vSet}};`,
   ctx, {filename: 'grainview_emulator.html'});
 
 const G = ctx.__gv, snap = JSON.parse(fs.readFileSync(snapPath, 'utf8'));
 G.M = snap;
 if (snap.connected) { G.st.sound = snap.selected; G.st.scene = snap.edit_scene || 'A'; }
 else if (snap._sound != null) G.st.sound = snap._sound;    // test: the last sound polled
-G.st.view = view;
+const setup = snap._setup || (view === 'SETUP' ? [null, 0, 0] : null);
+G.st.view = setup ? 'WAVE' : view;
+if (setup) {
+  G.st.overlay = 'SETUP'; G.st.setup = {g: setup[0], gc: setup[1], cur: setup[2]};
+}
+const gv = snap._gv || {};
+G.st.selPlays = !!gv.selPlays; G.st.touchOn = gv.touchOn !== 0;
 G.CAT = JSON.parse(fs.readFileSync(path.join(dir, 'gv_settings.json'), 'utf8'));
 if (snap._touch) G.st.touch = {k: snap._touch[0], src: snap._touch[1], t: Date.now()};
 G.st.dived = !!snap._dived; G.st.setCur = snap._setCur || 0;
+if (setup && setup[0] != null && '_edit' in snap) {
+  const g = G.SETUP_GROUPS[setup[0]][1], e = G.gItems(g)[setup[2]];
+  G.st.edit = {g, e, v: snap._edit, v0: null};
+}
 for (const p of snap._prev ? [...snap._prev, snap] : []) {
   G.M = p; G.st.sound = p.selected; G.st.scene = p.edit_scene || 'A'; G.detectTouch();
 }
 G.M = snap;
-if (!G.views[view]) throw new Error('view not ported: ' + view);
+if (!setup && !G.views[view]) throw new Error('view not ported: ' + view);
 const rand = (snap._rand || []).slice();
 vm.runInContext('Math.random = () => __next()', Object.assign(ctx, {__next: () => rand.shift()}));
 let b;
 for (const t of snap._steps || [0]) {          // as the emulator's render(): hero or view
-  clock = t; b = G.fb(); (G.touchActive() ? G.vTouch : G.views[view])(b);
+  clock = t; b = G.fb(); (setup ? G.vSetup : G.touchActive() ? G.vTouch : G.views[view])(b);
 }
 if (!snap.connected) G.box(b, 'NO MODULE LINK');
 const out = Buffer.alloc(b.p.length / 2);

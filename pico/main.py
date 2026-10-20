@@ -153,6 +153,27 @@ def mg_select(n):
     s.write8(M.STATE + 0x11, s.read_block8(M.STATE + 0x08, 1)[0])
     mg_poll()                                 # show it at once
 
+def mg_play(timeout_ms=500):
+    """Playback -> the selected sound: mg_load.post_event_nohalt(EV_PLAY_SELECTED). The
+    firmware posts events with |= and the engine fetch-and-clears them each tick, so we
+    only write when the word reads 0, then wait for the engine to take it."""
+    import mg_map as M
+    s, bit = dbg[0], 1 << M.EV_PLAY_SELECTED
+    if mg["err"] is not None or s is None:
+        raise RuntimeError("NO MODULE LINK")
+    t0 = time.ticks_ms()
+    while time.ticks_diff(time.ticks_ms(), t0) < timeout_ms:
+        if s.read32(M.EVENTS) == 0:
+            s.write32(M.EVENTS, bit)
+            while time.ticks_diff(time.ticks_ms(), t0) < timeout_ms:
+                if not s.read32(M.EVENTS) & bit:
+                    mg_poll()
+                    return
+                time.sleep_ms(1)
+            break
+        time.sleep_ms(1)
+    raise RuntimeError("play: try again")
+
 # --- the Pico's own UI (gv_ui.py) ---
 MAC_MS = 3000                                 # no Mac frame for this long -> our own UI
 FRAME_MS = 33                                 # WAVE's grain animation, ~30 fps
@@ -164,7 +185,7 @@ def ui_snap():
     p = mg["poll"]
     if mg["err"] is None and p is not None and p.snap is not None:
         return p.snap
-    return {"connected": False, "error": mg["err"]}
+    return {"mode": "swd", "connected": False, "error": mg["err"]}
 
 def ui_own():
     m = gv["mac_at"]
@@ -227,6 +248,8 @@ def ui_key(name):
     if act and act[0] == "select":
         try:
             mg_select(act[1])
+            if act[2]:                        # SETUP > GRAINVIEW > Sel plays
+                mg_play()
         except Exception as e:
             gv["ui"].flash(str(e) or type(e).__name__)
     ui_draw()
@@ -244,6 +267,7 @@ def swd_op(op, body):
     G (reg u8, word)...      x (release the pins, stop polling until the next c)
     S -> the latest poll as JSON (polls first if a write came in or it's > FRESH_MS old)
     v [view] -> our UI rendered from the latest poll (8192 bytes) + that poll as JSON
+    (view "SETUP" = the SETUP overlay; a snapshot's "_setup" opens a group / row in it)
     v snapshot JSON (+ "_view") -> just the frame, for that snapshot (tests; the panel
                  stays live; the JSON is parsed in place: no copy from a busy heap)
     P -> UI / poll timing since the last P, as JSON
@@ -286,7 +310,9 @@ def swd_op(op, body):
         snap = json.loads(body) if given else dict(ui_snap())
         view = snap.pop("_view", None) if given else bytes(body).decode()
         del body
-        if view:
+        if view == "SETUP":                   # the overlay (on the current view)
+            snap.setdefault("_setup", [None, 0, 0])
+        elif view:
             gv["ui"].view = view
         snap.setdefault("_steps", [0])
         gv["ui"].render(snap)
