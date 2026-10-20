@@ -8,7 +8,9 @@
 #   'C' + 1 byte              contrast
 #   'H'                       hello -> replies "@HELLO 1"
 #   'Q'                       quit to the REPL (lets mpremote in; tools/gv_pico.py does this)
+#   'D' + seq + op + len(u16) + body    SWD to the Multigrain (pico/swd.py), see swd_op()
 # Pico -> Mac, text lines:  "@E +1" (encoder steps)  "@B BACK 1" (button down / 0 = up)
+#   "@D <seq> <status> <n>" + n raw bytes   SWD reply (status 0 ok, 1 = n bytes of error text)
 #
 # Ctrl-C is disabled while running (frames are binary). Escape hatch: hold BACK while
 # plugging in and it stops before taking over, leaving the REPL free.
@@ -16,6 +18,7 @@ import array
 import machine
 import micropython
 import select
+import struct
 import sys
 import time
 from machine import Pin, SPI
@@ -74,6 +77,80 @@ BPR = 64
 def read_into(mv):
     inb.readinto(mv)                          # blocks until mv is full
 
+# --- SWD (to the Multigrain through J3 -> JTRACE) ---
+dbg = [None]                                  # the SWD object, made on the first 'c'
+
+def swd_op(op, body):
+    """One SWD request -> reply bytes. All little-endian; addresses/words u32.
+    c khz(u16) -> DPIDR      r addr n -> n bytes      w addr words...      b addr bytes...
+    R (addr, n u16)... -> the spans' bytes, back to back
+    h -> DHCSR (halted)      u (resume)               g regs(u8)... -> words
+    i lo hi tries(u16) -> pc xpsr, halted with pc in lo..hi (or b"": missed, running)
+    G (reg u8, word)...      x (release the pins)"""
+    s = dbg[0]
+    if op == 0x63:                            # 'c'
+        khz = struct.unpack("<H", body)[0]
+        if s is None or s.khz != khz:
+            if s is not None:
+                s.close()
+            from swd import SWD
+            s = dbg[0] = SWD(khz=khz)
+        return struct.pack("<I", s.connect())
+    if op == 0x78:                            # 'x'
+        if s is not None:
+            s.close()
+            dbg[0] = None
+        return b""
+    if s is None:
+        raise RuntimeError("SWD not connected")
+    if op == 0x72:                            # 'r'
+        a, n = struct.unpack("<II", body)
+        return s.read_block8(a, n)
+    if op == 0x52:                            # 'R'
+        return b"".join(s.read_block8(*struct.unpack_from("<IH", body, i))
+                        for i in range(0, len(body), 6))
+    if op == 0x77:                            # 'w'
+        a = struct.unpack_from("<I", body)[0]
+        for i in range(4, len(body), 4):
+            s.write32(a, struct.unpack_from("<I", body, i)[0])
+            a += 4
+        return b""
+    if op == 0x62:                            # 'b'
+        a = struct.unpack_from("<I", body)[0]
+        for v in body[4:]:
+            s.write8(a, v)
+            a += 1
+        return b""
+    if op == 0x68:                            # 'h'
+        return struct.pack("<I", s.halt())
+    if op == 0x69:                            # 'i'
+        r = s.halt_in(*struct.unpack("<IIH", body))
+        return struct.pack("<II", *r) if r else b""
+    if op == 0x75:                            # 'u'
+        s.resume()
+        return b""
+    if op == 0x67:                            # 'g'
+        return b"".join(struct.pack("<I", s.read_reg(i)) for i in body)
+    if op == 0x47:                            # 'G'
+        for i in range(0, len(body), 5):
+            s.write_reg(body[i], struct.unpack_from("<I", body, i + 1)[0])
+        return b""
+    raise RuntimeError("unknown SWD op 0x%02X" % op)
+
+def swd_packet():
+    hd = bytearray(4)
+    read_into(hd)
+    seq, op, n = hd[0], hd[1], hd[2] | hd[3] << 8
+    body = bytearray(n)
+    if n:
+        read_into(body)
+    try:
+        out, st = swd_op(op, body), 0
+    except Exception as e:                    # SWDError, bad args: report, keep running
+        out, st = str(e).encode(), 1
+    sys.stdout.buffer.write(("@D %d %d %d\n" % (seq, st, len(out))).encode())
+    sys.stdout.buffer.write(out)
+
 def packet():
     read_into(one)                            # hunt for the A5 5A sync
     if one[0] != 0xA5:
@@ -97,6 +174,8 @@ def packet():
         oled.contrast(one[0])
     elif t == 0x48:                           # 'H'
         print("@HELLO 1")
+    elif t == 0x44:                           # 'D'
+        swd_packet()
     elif t == 0x51:                           # 'Q'
         raise SystemExit
 
@@ -134,5 +213,7 @@ except Exception as e:
     sys.print_exception(e)
 finally:
     micropython.kbd_intr(3)
+    if dbg[0] is not None:
+        dbg[0].close()
     for p in (enc_a, enc_b):
         p.irq(None)

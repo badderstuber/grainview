@@ -9,6 +9,38 @@ _Last updated: 2026-10-20._
 
 ---
 
+## Update 2026-10-20 (night) — the server runs on the Pico's SWD, no ST-Link ✅
+
+- **USB protocol:** new `'D'` packet in `pico/main.py`: `A5 5A 'D' seq op len(u16) body`,
+  reply line `@D seq status n` + n raw bytes (status 1 = error text; the screen keeps
+  running). Ops: `c` connect(kHz) · `r` read n bytes · `w` write32s · `b` write8s ·
+  `h` halt · `u` resume · `g`/`G` core regs · `i` halt-in-PC-range · `x` release pins.
+- **`pico/swd.py`** gained `halt / resume / read_reg / write_reg` (pyOCD's DHCSR/DCRSR/DFSR
+  sequence) and `halt_in(lo, hi)`: the idle-loop catch from `mg_load.wait_idle_and_halt`
+  runs **on the Pico** (each miss is halted ~0.2 ms, not 3 USB round trips ≈ 6.5 ms).
+  `wait_idle_and_halt` uses it automatically when the target has `halt_in`.
+- **`tools/gv_pico.py`:** `PicoLink.swd()` (shares the screen's serial port; seq-matched
+  replies) + **`PicoTarget`** = the pyOCD Target subset the mg_* helpers use
+  (`read_memory[_block8/32]`, `write_memory[_block8/32]`, `halt/resume`, core regs), so
+  mg_load / mg_param / mg_preset run unchanged. `gv_pico.py swd` = read-only check.
+- **Server:** `tools/venv/bin/python tools/grainview_server.py --swd pico` (default 8 MHz;
+  `--freq` overrides; needs the Pico link, so not with `--pico off`).
+- **Hardware-tested** (Pico 2 W module, J3 → JTRACE): IDs; 64 KB flash = the .bin (238 KB/s
+  through USB); **write8 byte lanes OK** (SDRAM scratch 0xC3F00000, restored); write32 on
+  DCRDR; halt/PC/xPSR/resume; `halt_in` catches the idle loop in ~5 ms; server `/state`,
+  `/files`, `/select` 3→2, **`/load` index 3 → 2 into sound 2** (kick, then back to
+  drz1_cwbll.wav — project left as it was).
+- **Timing:** one USB round trip ≈ 1.7 ms (USB full-speed frames). 8 sound blocks = 43 ms
+  (ST-Link 120 ms). The poll's 75 small reads made it ~155 ms, so: scatter-read op `R`
+  (list of addr/len → one reply) + **`gv_pico.ReplayReads`**: records what a poll read,
+  prefetches that in one `R` next poll (spans merged, gap 48), live-reads anything new
+  (folder change etc.) and learns it. `SwdBackend._read` is unchanged (wrapped).
+  Result: **poll = 1 round trip, ~64 ms** (~99 ms when the settings refresh), snapshot
+  identical to direct reads. It's now SWD-bound on the Pico: 10.4 KB in 43 spans, ~0.6 ms
+  Python overhead per span; 12 MHz only gets 55 ms, so 8 MHz stays.
+- Next: move the poll + actions onto the Pico itself (the standalone module without the
+  Mac). Optional: trim the viper loop's per-word idle cycles / per-span overhead.
+
 ## Update 2026-10-20 (evening) — first GRAINVIEW v1.0 module built + SWD link proven ✅
 
 - **Power bring-up** (main board, Pico out, USB-free): VSYS (Pico socket pin 39) = 5.0 V

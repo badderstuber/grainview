@@ -9,6 +9,7 @@
 #   s = SWD()                      # 8 MHz SWCLK (12 MHz also verified)
 #   s.connect()                    # -> DPIDR, debug powered up, AP0 (Cortex-M7 AHB-AP)
 #   s.read32(a)  s.write32(a, v)  s.write8(a, v)  s.read_block8(a, n) -> bytes
+#   s.halt()  s.resume()  s.read_reg(i)  s.write_reg(i, v)   # core debug (DHCSR/DCRSR)
 #   s.close()                      # give the pins back
 import array
 import time
@@ -23,7 +24,10 @@ AP_CSW, AP_TAR, AP_DRW = 0x00, 0x04, 0x0C
 CSW_BASE = 0x23000010        # debug master, privileged, auto-increment (single)
 CSW_8, CSW_32 = 0, 2         # CSW size field
 RETRIES = 100
-PIO0 = 0x50200000            # RP2350 PIO0; SM0 FIFOs at FSTAT +0x04, TXF0 +0x10, RXF0 +0x20
+DHCSR, DCRSR, DCRDR, DFSR = 0xE000EDF0, 0xE000EDF4, 0xE000EDF8, 0xE000ED30
+DBGKEY, C_DEBUGEN, C_HALT = 0xA05F0000, 1, 2
+S_REGRDY, S_HALT = 1 << 16, 1 << 17
+PIO0 = 0x50200000           # RP2350 PIO0; SM0 FIFOs at FSTAT +0x04, TXF0 +0x10, RXF0 +0x20
 
 # DPv2 dormant -> SWD selection alert, LSB first (byte by byte)
 ALERT = (0x92, 0xF3, 0x09, 0x62, 0x95, 0x2D, 0x85, 0x86,
@@ -336,3 +340,51 @@ class SWD:
         words = (a + n - lo + 3) // 4
         b = bytes(self.read_block32(lo, words))
         return b[a - lo:a - lo + n]
+
+    # ---- core debug (same register sequence as pyOCD's cortex_m) ----
+    def halt(self):
+        """Halt the core; returns DHCSR once S_HALT is set."""
+        self.write32(DHCSR, DBGKEY | C_DEBUGEN | C_HALT)
+        for _ in range(100):
+            d = self.read32(DHCSR)
+            if d & S_HALT:
+                return d
+        raise SWDError("core didn't halt (DHCSR 0x%08X)" % d)
+
+    def resume(self):
+        """Clear the debug cause bits and let the core run (no-op if it's running)."""
+        if self.read32(DHCSR) & S_HALT:
+            self.write32(DFSR, 0x1F)
+            self.write32(DHCSR, DBGKEY | C_DEBUGEN)
+
+    def _regsel(self, sel):
+        self.write32(DCRSR, sel)
+        for _ in range(100):
+            d = self.read32(DHCSR)
+            if not d & S_HALT:
+                raise SWDError("core not halted")
+            if d & S_REGRDY:
+                return
+        raise SWDError("register 0x%X not ready" % sel)
+
+    def read_reg(self, i):
+        """Core register i (DCRSR REGSEL: r0-r12 0-12, sp 13, lr 14, pc 15, xpsr 16)."""
+        self._regsel(i)
+        return self.read32(DCRDR)
+
+    def write_reg(self, i, v):
+        self.write32(DCRDR, v)
+        self._regsel(1 << 16 | i)
+
+    def halt_in(self, lo, hi, tries=200):
+        """Halt only with PC in lo..hi in thread mode (mg_load.wait_idle_and_halt, but each
+        miss is halted for ~0.2 ms instead of a USB round trip or three).
+        Returns (pc, xpsr) with the core halted, or None with it running."""
+        for _ in range(tries):
+            self.halt()
+            pc, xpsr = self.read_reg(15), self.read_reg(16)
+            if lo <= pc <= hi and xpsr & 0x1FF == 0:
+                return pc, xpsr
+            self.resume()
+            time.sleep_ms(3)
+        return None

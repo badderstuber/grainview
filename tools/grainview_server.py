@@ -6,6 +6,8 @@ with the same API, so the UI can't tell them apart:
     --mock   in-memory fake module (no hardware) - for UI work
     default  live module over SWD (ST-Link), built on the hardware-tested
              helpers in mg_param.py / mg_load.py. No halts except WAV load.
+    --swd pico   the same, through the GRAINVIEW Pico's SWD master (gv_pico.PicoTarget,
+             J3 -> JTRACE) instead of the ST-Link
 
 API (all JSON):
     GET  /state                 module snapshot (see Backend.snapshot)
@@ -31,6 +33,7 @@ Pico USB screen (breadboard GRAINVIEW, pico/main.py; see gv_pico.py):
 Usage:
     tools/venv/bin/python tools/grainview_server.py --mock
     tools/venv/bin/python tools/grainview_server.py          # live
+    tools/venv/bin/python tools/grainview_server.py --swd pico   # live, no ST-Link
 Then open http://localhost:8745/
 """
 import argparse
@@ -405,21 +408,29 @@ class MockBackend:
 class SwdBackend:
     """Live module. A poller thread keeps a cached snapshot; actions take the
     same lock (pyOCD isn't thread-safe). Plain RAM reads/writes, no halt -
-    except load(), which needs the one-halt firmware call (small audio blip)."""
+    except load(), which needs the one-halt firmware call (small audio blip).
+    probe = None: ST-Link via pyOCD; a gv_pico.PicoLink: the Pico's SWD master."""
     mode = "swd"
     BLOCK_LO, BLOCK_HI = 0x48, 0x424     # scene A params .. end of scene B mod matrix
 
-    def __init__(self, freq, hz):
-        self.freq, self.period = freq, 1.0 / hz
+    def __init__(self, freq, hz, probe=None):
+        self.freq, self.period, self.probe = freq, 1.0 / hz, probe
         self.lock = threading.Lock()
         self.session = None
         self.t = None
+        self.replay = None               # Pico: gv_pico.ReplayReads (one round trip per poll)
         self.snap = {"mode": self.mode, "connected": False, "error": "connecting",
                      "sounds": []}
         self.st, self.st_t = None, 0.0   # live settings cache (read every SETTINGS_EVERY s)
         threading.Thread(target=self._poll, daemon=True).start()
 
     def _connect(self):
+        if self.probe is not None:
+            import gv_pico  # noqa: E402 - needs pyserial
+            t = gv_pico.PicoTarget(self.probe, self.freq // 1000)
+            t.connect()
+            self.t, self.replay = t, gv_pico.ReplayReads(t)
+            return
         try:
             self.session = P.connect(self.freq)
         except SystemExit as e:              # mg_peek.connect exits when no probe
@@ -448,7 +459,14 @@ class SwdBackend:
                 time.sleep(2.0)
 
     def _read(self):
-        t = self.t
+        if self.replay is None:
+            return self._read_from(self.t)
+        try:
+            return self._read_from(self.replay.begin())
+        finally:
+            self.replay.end()
+
+    def _read_from(self, t):
         if self.st is None or time.time() - self.st_t >= SETTINGS_EVERY:
             self.st, self.st_t = read_settings(t), time.time()
         f32 = lambda b, off: P.f32(int.from_bytes(b[off:off + 4], "little"))  # noqa: E731
@@ -736,12 +754,14 @@ def main():
     ap.add_argument("--mock", action="store_true", help="fake module, no hardware")
     ap.add_argument("--port", type=int, default=8745)
     ap.add_argument("--hz", type=float, default=5.0, help="SWD poll rate (live)")
-    ap.add_argument("--freq", type=int, default=4_000_000, help="SWD clock Hz")
+    ap.add_argument("--freq", type=int,
+                    help="SWD clock Hz (default 4 MHz ST-Link, 8 MHz Pico)")
+    ap.add_argument("--swd", choices=["stlink", "pico"], default="stlink",
+                    help="live SWD probe: the ST-Link, or the GRAINVIEW Pico (J3 -> JTRACE)")
     ap.add_argument("--pico", default="auto",
                     help="Pico USB screen: auto (find + reconnect), a serial port, or off")
     a = ap.parse_args()
 
-    be = MockBackend() if a.mock else SwdBackend(a.freq, a.hz)
     pico = None
     if a.pico != "off":
         try:
@@ -749,8 +769,17 @@ def main():
             pico = gv_pico.PicoLink(None if a.pico == "auto" else a.pico)
         except ImportError as e:
             print(f"Pico screen off ({e}); run with tools/venv/bin/python")
+    if a.mock:
+        be = MockBackend()
+    elif a.swd == "pico":
+        if pico is None:
+            sys.exit("--swd pico needs the Pico link (not --pico off; tools/venv/bin/python)")
+        be = SwdBackend(a.freq or 8_000_000, a.hz, probe=pico)
+    else:
+        be = SwdBackend(a.freq or 4_000_000, a.hz)
     httpd = ThreadingHTTPServer(("127.0.0.1", a.port), make_handler(be, pico))
-    print(f"GRAINVIEW ({be.mode}): http://localhost:{a.port}/")
+    print(f"GRAINVIEW ({be.mode}{' via Pico' if be.mode == 'swd' and a.swd == 'pico' else ''}):"
+          f" http://localhost:{a.port}/")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

@@ -168,10 +168,12 @@ A standalone RP2040-powered module with its own TFT + encoder/buttons that sits
 next to the Multigrain and connects via a 4-wire SWD ribbon to JTRACE. Gives the
 Multigrain the screen it lacks, no phone/laptop. (Pico W can ALSO serve the
 web app over WiFi as an optional big-screen view.)
-- [ ] **Breadboard prototype (no PCB):** Pico + ST7789 TFT + push-encoder, jumpers
-      to the Multigrain JTRACE pins (same as ST-Link). Prove it end to end first.
-- [ ] Port SWD **read** (background mem read) + **function-call** (halt/set-regs/
-      run/catch/restore) logic to RP2040 C/C++ (PIO SWD master).
+- [x] **Breadboard prototype (no PCB):** Pico + SSD1327 + push-encoder (2026-10-13);
+      v1.0 module board built + SWD through J3 → JTRACE proven 2026-10-20.
+- [x] Port SWD **read** + **function-call** (halt/set-regs/run/catch) to the Pico — done in
+      MicroPython (PIO + viper, `pico/swd.py`), not C. The Mac drives it over USB
+      (`gv_pico.PicoTarget`, `grainview_server.py --swd pico`); WAV load hardware-tested
+      2026-10-20. Still Mac-driven: the logic itself moves onto the Pico with the on-screen UI.
 - [ ] Hardcode the mapped addresses + function entry points (firmware-version
       aware — Multigrain 1.4.8.0; plan for version detection via DBGMCU / a known
       signature so a stock update doesn't silently break it).

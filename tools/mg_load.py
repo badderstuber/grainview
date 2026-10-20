@@ -216,6 +216,9 @@ def post_event_nohalt(t, n, timeout=0.5):
 def wait_idle_and_halt(t, tries=200):
     """Halt only when the core is in main()'s idle loop, in thread mode.
     Returns the saved xPSR (truthy) or None."""
+    if hasattr(t, "halt_in"):                # gv_pico.PicoTarget: the loop runs on the Pico
+        r = t.halt_in(IDLE_LO, IDLE_HI, tries)
+        return r[1] | (1 << 24) if r else None
     for _ in range(tries):
         t.halt()
         pc, xpsr = t.read_core_registers_raw(["pc", "xpsr"])

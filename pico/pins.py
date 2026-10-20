@@ -26,4 +26,4 @@ BUTTONS = (
     ("SETUP", 12),
 )
 
-# Reserved (Phase 3): SWCLK 14, SWDIO 15, VTREF sense 26 (ADC0), debug UART 0/1
+# Reserved: SWCLK 14, SWDIO 15 (swd.py defaults), VTREF sense 26 (ADC0), debug UART 0/1
