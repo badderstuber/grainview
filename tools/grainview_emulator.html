@@ -132,7 +132,7 @@ const GV_SETTINGS=[                              // local: this browser now, the
   {label:'Font',type:'enum',options:Object.keys(FONT_SETS),get:()=>Object.keys(FONT_SETS).indexOf(st.fontSet),
    set:v=>{st.fontSet=Object.keys(FONT_SETS)[v];localStorage.gvFontSet=st.fontSet;}},
   {label:'Link',type:'info',get:()=>M_?M_.mode.toUpperCase()+(M_.connected?'':' X'):'-'},
-  {label:'Firmware',type:'info',get:()=>'1.4.8.0'}];
+  {label:'Firmware',type:'info',get:()=>M_&&(M_.firmware||M_.fw)||'-'}];   // the module's, as checked
 const SETUP_GROUPS=[['MODULE','module'],['PRESET','preset'],['SAMPLE',null],['GRAINVIEW','gv']];
 function gItems(g){return g==='gv'?GV_SETTINGS:(CAT&&CAT[g])||[];}
 // current value (null = unknown: not mapped on a live module yet)
@@ -531,6 +531,10 @@ function picoKeys(){if(EMBED)return;
     else if(m.t==='btn'&&m.down){if(m.n==='PUSH')push();else if(PICO_BTN[m.n])btn(PICO_BTN[m.n]);}};}
 
 // ---------- render ----------
+// no module to show: no server / no link / its firmware being checked or not the one we
+// know (the backend then doesn't read or write it; "fw" in /state)
+function linkMsg(){return !M_?'NO SERVER':M_.fw==='checking'?'CHECKING FIRMWARE':
+  M_.fw==='unknown'?'UNKNOWN FIRMWARE':'NO MODULE LINK';}
 const cv=document.getElementById('oled');
 function render(){const b=fb();
   if(st.overlay==='FILE')vFile(b);
@@ -538,7 +542,7 @@ function render(){const b=fb();
   else if(touchActive())vTouch(b);
   else ({WAVE:vWave,PARAM:vParm,MOD:vMod,SETTINGS:st.quant&&snd()?vQuant:vSet}[st.view])(b);
   if(st.flash&&Date.now()<st.flashT)box(b,st.flash,st.flashLabel);
-  else if(!M_||!M_.connected)box(b,M_?'NO MODULE LINK':'NO SERVER');
+  else if(!M_||!M_.connected)box(b,linkMsg());
   show(cv,b);mirror(b);}
 
 // ---------- zoom / actual size (calibration shared via localStorage) ----------

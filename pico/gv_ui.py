@@ -75,7 +75,6 @@ GRAIN_MIN_MS, GRAIN_MAX, GRAIN_PX, GRAIN_SPREAD, SCAN_STEP = 80, 160, 2, 0.02, 0
 SETUP_GROUPS = (("MODULE", "module"), ("PRESET", "preset"), ("SAMPLE", None), ("GRAINVIEW", "gv"))
 CFG = "gv_cfg.json"
 ONOFF = ("OFF", "ON")
-FIRMWARE = "1.4.8.0"
 # FILE overlay: the card's folders (the emulator's FOLDERS / FNAME); PRESETS / PROJECTS = the
 # SLOTS of each, from the poll's "store" (no fetch)
 FOLDERS = ("project", "Wavs", "Recs", "PRESETS", "PROJECTS")
@@ -237,7 +236,8 @@ class UI:
             {"label": "Wave style", "type": "enum", "options": ("B",), "get": lambda: 0},
             {"label": "Font", "type": "enum", "options": ("Spleen",), "get": lambda: 0},
             {"label": "Link", "type": "info", "get": self.link_text},
-            {"label": "Firmware", "type": "info", "get": lambda: FIRMWARE})
+            {"label": "Firmware", "type": "info",   # the module's, as checked (main.py)
+             "get": lambda: self.snap and (self.snap.get("firmware") or self.snap.get("fw")) or "-"})
         self.testing = False
 
     # ---- data ----
@@ -912,7 +912,13 @@ class UI:
         if self.flash_msg and time.ticks_diff(self.flash_until, time.ticks_ms()) > 0:
             self.box(self.flash_msg, self.flash_label)
         elif not (snap and snap.get("connected")):
-            self.box("NO MODULE LINK")
+            self.box(self.link_msg())
+
+    def link_msg(self):
+        """No module to show: no link, or its firmware being checked / not the one we know."""
+        fw = self.snap and self.snap.get("fw")
+        return "CHECKING FIRMWARE" if fw == "checking" else "UNKNOWN FIRMWARE" \
+            if fw == "unknown" else "NO MODULE LINK"
 
     def animating(self):
         """WAVE with dots alive or being launched (else frames wouldn't change)."""

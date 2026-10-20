@@ -92,7 +92,9 @@ dbg = [None]                                  # the SWD object
 mg = {"poll": None, "auto": True, "stale": True, "err": "connecting", "at": 0, "next": 0,
       "full_at": None,                        # last poll of all 8 sounds (else: the focused one)
       "mac_at": None,                         # last 'S': while the Mac reads, poll all 8
-      "fix": None}                            # a load's 2nd half, due later (mgfile.fix)
+      "fix": None,                            # a load's 2nd half, due later (mgfile.fix)
+      "fw": None, "fwc": None}                # firmware: True = ours, False = another build,
+                                              # None = not known (yet); fwc = the check running
 vtref = machine.ADC(pins.VTREF)
 
 def mg_link(khz=8000):
@@ -112,27 +114,35 @@ def mg_link(khz=8000):
 def mg_poll(full=False):
     """Poll the Multigrain now: all 8 sounds for the Mac ('S'), else just the selected one
     (all our UI shows; ~1/4 the time, so WAVE's animation doesn't stall). A failure is
-    kept for 'S' and retried after RETRY_MS."""
+    kept for 'S' and retried after RETRY_MS. Nothing is read until the module's firmware
+    is known to be ours (mgfw.py, run by fw_step()); it's checked again after a reset."""
+    import mgfw
     now = time.ticks_ms()
     try:
         if mg["err"] is not None:             # (re)connect first
             if vtref.read_u16() < VTREF_MIN:
                 raise RuntimeError("Multigrain off")
             mg_link(dbg[0].khz if dbg[0] else 8000)
-        if mg["fix"] is not None:
-            mg_fix()
-        mac = mg["mac_at"] is not None and time.ticks_diff(now, mg["mac_at"]) < 1000
-        full = full or mac
-        mg["poll"].read(focus=not full)
-        gv["perf"][3] += 1
-        gv["perf"][4] += time.ticks_diff(time.ticks_ms(), now)
-        if full:
-            mg["full_at"] = now
+        if mgfw.was_reset(dbg[0]):
+            mg["fw"] = mg["fwc"] = None
+        if mg["fw"] is None and mg["fwc"] is None:
+            mg["fwc"] = mgfw.Check()          # (the first poll after a (re)connect too)
+        if mg["fw"] is True:
+            if mg["fix"] is not None:
+                mg_fix()
+            mac = mg["mac_at"] is not None and time.ticks_diff(now, mg["mac_at"]) < 1000
+            full = full or mac
+            mg["poll"].read(focus=not full)
+            gv["perf"][3] += 1
+            gv["perf"][4] += time.ticks_diff(time.ticks_ms(), now)
+            if full:
+                mg["full_at"] = now
         mg["err"] = None
         mg["next"] = time.ticks_add(now, POLL_MS)
     except Exception as e:                    # SWDError, a module mid-reset, ...
         mg["err"] = str(e) or type(e).__name__
         mg["next"] = time.ticks_add(now, RETRY_MS)
+        mg["fw"] = mg["fwc"] = None           # gone: check its firmware again when it's back
     mg["at"], mg["stale"] = now, False
     ui_data()
     if gc.mem_free() < GC_FREE:               # ~17 ms: here, not mid-animation, and only when
@@ -140,15 +150,42 @@ def mg_poll(full=False):
         gc.collect()                          # garbage), so the heap stays in one piece
         gv["perf"][7] += time.ticks_diff(time.ticks_us(), t)
 
+def fw_step():
+    """The next piece of the firmware check (mgfw.Check); when it's done, poll at once."""
+    try:
+        r = mg["fwc"].step(dbg[0])
+    except Exception as e:                    # the link went: reconnect + check again
+        mg["fwc"], mg["err"] = None, str(e) or type(e).__name__
+        mg["next"] = time.ticks_add(time.ticks_ms(), RETRY_MS)
+        return
+    if r is not None:
+        mg["fwc"], mg["fw"], mg["stale"] = None, r, True
+        mg["next"] = time.ticks_ms()
+
+def mg_live():
+    """Is there a poll to show: linked, and the firmware checked as ours?"""
+    p = mg["poll"]
+    return mg["err"] is None and mg["fw"] is True and p is not None and p.snap is not None
+
+def mg_down():
+    """The snapshot while there's no poll to show: no link, or the firmware being checked
+    ("fw": "checking") / not ours ("fw": "unknown": we don't read or write it then)."""
+    if mg["err"] is not None or dbg[0] is None:
+        return {"mode": "swd", "connected": False, "error": mg["err"]}
+    import mg_map as M
+    fw = "unknown" if mg["fw"] is False else "checking"
+    return {"mode": "swd", "connected": False, "fw": fw, "error":
+            "unknown Multigrain firmware (GRAINVIEW is for %s)" % M.FW_VERSION
+            if mg["fw"] is False else "checking the Multigrain's firmware"}
+
 def mg_json(file=None):
     """The latest poll as JSON pieces (see Poller.json), + "_file" if given."""
-    p = mg["poll"]
-    if mg["err"] is None and p is not None and p.snap is not None:
-        js = p.json()
+    if mg_live():
+        js = mg["poll"].json()
         if file is None:
             return js
         return js[:-1] + [js[-1][:-1] + b', "_file": ' + json.dumps(file).encode() + b"}"]
-    return [json.dumps({"mode": "swd", "connected": False, "error": mg["err"]}).encode()]
+    return [json.dumps(mg_down()).encode()]
 
 def mg_select(n):
     """Edit focus -> sound n, no halt: mg_load.select_nohalt's two writes."""
@@ -193,8 +230,8 @@ def mg_play(timeout_ms=500):
 def mg_do(act):
     """A UI action (gv_ui.UI.btn) on the module -> its result, or raises with the reason."""
     s, k = dbg[0], act[0]
-    if mg["err"] is not None or s is None:
-        raise RuntimeError("NO MODULE LINK")
+    if not mg_live():
+        raise RuntimeError(mg_down()["error"] or "NO MODULE LINK")
     if k == "select":
         mg_select(act[1])
         if act[2]:                            # SETUP > GRAINVIEW > Sel plays
@@ -237,10 +274,7 @@ gv = {"ui": None, "mac_at": None, "own": False, "frame": 0,
                     # polls, poll ms, since, all frames pushed, gc us, loops, last push, max gap
 
 def ui_snap():
-    p = mg["poll"]
-    if mg["err"] is None and p is not None and p.snap is not None:
-        return p.snap
-    return {"mode": "swd", "connected": False, "error": mg["err"]}
+    return mg["poll"].snap if mg_live() else mg_down()
 
 def ui_own():
     m = gv["mac_at"]
@@ -344,6 +378,8 @@ def swd_op(op, body):
     P -> UI / poll timing since the last P, as JSON
     (test renders start the grain dots afresh at clock 0 unless the snapshot scripts them)"""
     if op in WRITES:
+        if mg["fw"] is not True:              # not on a firmware we don't know (or yet)
+            raise RuntimeError(mg_down()["error"] or "NO MODULE LINK")
         mg["stale"] = True
     if op == 0x63:                            # 'c'
         mg["auto"], mg["stale"] = True, True
@@ -353,7 +389,7 @@ def swd_op(op, body):
     if op == 0x78:                            # 'x'
         if dbg[0] is not None:
             dbg[0].close()
-        dbg[0] = mg["poll"] = None
+        dbg[0] = mg["poll"] = mg["fw"] = mg["fwc"] = None
         mg["auto"], mg["err"] = False, "SWD released"
         return b""
     if op == 0x53:                            # 'S'
@@ -498,6 +534,10 @@ try:
                     ui_key(name)
         if poller.poll(2):
             packet()
+        elif mg["fwc"] is not None and mg["err"] is None:
+            fw_step()                         # a chunk of the firmware check (~12 ms)
+            if mg["fwc"] is None:
+                mg_poll()                     # done: show the outcome / the module now
         elif mg["auto"] and time.ticks_diff(now, mg["next"]) >= 0:
             mg_poll()
         elif not gv["own"] and ui_own() or gv["ui"] and gv["ui"].wake_due():

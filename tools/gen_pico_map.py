@@ -64,6 +64,9 @@ def main():
         "PROJECT_EXISTS, PRESET_EXISTS, PRESET_LOCKED = %s, %s, %s"
         % (h(PR.PROJECT_EXISTS), h(PR.PRESET_EXISTS), h(PR.PRESET_LOCKED)),
         "SLOTS = %d" % PR.SLOTS,
+        "# the firmware all this is for (mg_load.FW_*): its flash image's SHA-256 (pico/mgfw.py)",
+        "FW_VERSION, FW_BASE, FW_SIZE = %r, %s, %d" % (L.FW_VERSION, h(L.FW_BASE), L.FW_SIZE),
+        "FW_SHA256 = %r" % L.FW_SHA256,
         "# FILE (pico/mgfile.py): file lists, loads, presets / projects - one-halt calls",
         "COUNTS, REC_LIST = %s, %s" % (h(L.COUNTS), h(L.REC_LIST)),
         "LISTS = {%s}" % ", ".join("%d: %s" % (k, h(v)) for k, v in L.LISTS.items()),

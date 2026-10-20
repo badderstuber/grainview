@@ -9,6 +9,29 @@ _Last updated: 2026-10-21._
 
 ---
 
+## Update 2026-10-21 (late) — firmware version check ✅ (Pico + Mac server)
+
+- No version string in the image, so the build is known by the **SHA-256 of its flash
+  image** (0x08000000, 634672 bytes): `mg_load.FW_VERSION / FW_SIZE / FW_SHA256` (the .bin
+  isn't in git, so the hash is a constant; gen_pico_map copies it into mg_map.py). The
+  module's flash = Multigrain.1.4.8.0.bin byte for byte.
+- **Pico** (`pico/mgfw.py`): hashed in 4 KB chunks from the main loop (~2–2.5 s, panel stays
+  live), at every (re)connect and after a module **reset** (DHCSR S_RESET_ST, read each
+  poll). Until it passes: no polls, screen box **CHECKING FIRMWARE**; another build =
+  **UNKNOWN FIRMWARE**, nothing read or written: UI actions + the Mac's write / halt /
+  register ops refused with the reason (raw reads still allowed, for diagnosis).
+  SETUP > GRAINVIEW > Firmware now shows the checked build ("1.4.8.0" / unknown / checking).
+- **Mac server**: ST-Link path runs `mg_load.fw_ok()` at connect (refuses + `fw: unknown`);
+  through the Pico it passes the Pico's checking / unknown state on (no reconnect loop:
+  reconnecting would restart the check). /state has `"firmware"`, or `"fw"` when not connected.
+  Emulator: same boxes + Firmware row (`linkMsg()`).
+- **Tested on hardware:** boot check → live; SYSRESETREQ of the Multigrain → re-checked,
+  live again after 3.2 s; a Pico map with a wrong hash → UNKNOWN FIRMWARE on the panel,
+  `b` / `h` refused, `r` allowed, server shows it with 0 reconnects; `fw_ok()` = True (2.4 s
+  through the Pico). Parity: live 6 views + **310 case frames MATCH** (+5 firmware cases).
+  Poll 16 ms (+1 ms for the reset read), 154 KB free.
+- Not covered: the Mac CLI tools (mg_load.py / mg_preset.py ...) don't check (dev tools).
+
 ## Update 2026-10-21 (later) — FILE browser on the Pico ✅ (+ loading, presets, projects)
 
 - **FILE** (the emulator's vFile): FILE opens on the sound's folder, FILE again steps

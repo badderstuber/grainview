@@ -174,17 +174,19 @@ web app over WiFi as an optional big-screen view.)
       MicroPython (PIO + viper, `pico/swd.py`), not C. The Mac drives it over USB
       (`gv_pico.PicoTarget`, `grainview_server.py --swd pico`); WAV load hardware-tested
       2026-10-20. Still Mac-driven: the logic itself moves onto the Pico with the on-screen UI.
-- [ ] Hardcode the mapped addresses + function entry points (firmware-version
-      aware — Multigrain 1.4.8.0; plan for version detection via DBGMCU / a known
-      signature so a stock update doesn't silently break it).
+- [x] Hardcode the mapped addresses + function entry points (generated `pico/mg_map.py`),
+      firmware-version aware: the module's flash image is hashed (SHA-256) and must be
+      Multigrain 1.4.8.0, else GRAINVIEW shows UNKNOWN FIRMWARE and doesn't touch it; re-checked
+      after a module reset (`pico/mgfw.py`, server `mg_load.fw_ok`; done 2026-10-21).
 - [ ] On-screen UI: live mirror + SD browser + load-to-slot + patch mgmt. **Started 2026-10-20**
       in MicroPython framebuf (not LVGL): `pico/gv_ui.py` = a pixel-exact port of the
       emulator; WAVE (+ grain dots) / PARAM / MOD / SETTINGS / knob hero / SETUP overlay
       (GRAINVIEW settings editable, Sel plays) + SOUND‹› + FILE (browse, WAV load, preset /
       project menus; `pico/mgfile.py`, hardware-tested 2026-10-21) done, checked by
       `gv_pico.py ui`. A/B done 2026-10-21: the UI is complete (all the emulator has).
-- [ ] **Then** hardware: eurorack PCB + panel (KiCad), ~8 HP, bus power → 3.3 V,
-      VTREF sense only (no back-power), SWD header to ribbon.
+- [x] Hardware: eurorack PCB + panel (KiCad, `hardware/`, docs/HARDWARE.md), 8 HP, bus
+      power → 3.3 V, VTREF sense only (no back-power), SWD header to ribbon. Ordered from
+      JLC 2026-10-14, v1.0 **built and running** the Pico UI (2026-10-20/21).
 - [ ] Optional Pico W: serve the Phase-2 web app/API over WiFi too.
 
 ### GRAINVIEW spec — LOCKED 2026-10-11

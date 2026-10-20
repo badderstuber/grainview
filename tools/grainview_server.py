@@ -11,7 +11,9 @@ with the same API, so the UI can't tell them apart:
              snapshot; actions drive its SWD master via gv_pico.PicoTarget
 
 API (all JSON):
-    GET  /state                 module snapshot (see Backend.snapshot)
+    GET  /state                 module snapshot (see Backend.snapshot); "firmware" = the
+                                module's (checked at connect, mg_load.fw_ok), else not
+                                connected with "fw": "checking"|"unknown" (hands off)
     GET  /files[?folder=F]      file list of folder F (project|Wavs|Recs), default
                                 the SELECTED sound's folder
     POST /select  {"sound":0-7}               edit focus (no halt)
@@ -95,6 +97,10 @@ def folder_arg(f):
 
 class ApiError(Exception):
     pass
+
+
+class FirmwareError(RuntimeError):
+    """The module runs another firmware than the addresses are for (mg_load.FW_*)."""
 
 
 def check_args(sound=None, scene=None, name=None, src=None):
@@ -270,7 +276,7 @@ class MockBackend:
             p = self.sounds[self.playing]["scenes"]
             live = {k: round(p["A"][k] + (p["B"][k] - p["A"][k]) * m, 3) for k in NAMES}
             return {
-                "mode": self.mode, "connected": True, "error": None,
+                "mode": self.mode, "connected": True, "error": None, "firmware": L.FW_VERSION,
                 "selected": self.selected, "playing": self.playing,
                 "edit_scene": self.edit_scene, "morph": m, "sd_state": self.sd_state, "live": live,
                 "sync": self.sync, "clock_period": self.clock_period,
@@ -436,6 +442,8 @@ class SwdBackend:
         except SystemExit as e:              # mg_peek.connect exits when no probe
             raise RuntimeError(str(e)) from None
         self.t = self.session.target
+        if not L.fw_ok(self.t):              # every address here is for that build
+            raise FirmwareError(f"unknown Multigrain firmware (this is for {L.FW_VERSION})")
 
     def _poll(self):
         while True:
@@ -448,7 +456,8 @@ class SwdBackend:
                 time.sleep(max(0.0, self.period - (time.time() - t0)))
             except Exception as ex:          # noqa: BLE001 - surface + retry
                 self.snap = {"mode": self.mode, "connected": False, "error": str(ex),
-                             "sounds": self.snap.get("sounds", [])}
+                             "sounds": self.snap.get("sounds", []),
+                             **({"fw": "unknown"} if isinstance(ex, FirmwareError) else {})}
                 with self.lock:
                     if self.session is not None:
                         try:
@@ -462,6 +471,9 @@ class SwdBackend:
         if self.probe is None:
             return self._read_from(self.t)
         snap = self.t.snapshot()             # the Pico's own poll
+        if not snap.get("connected") and snap.get("fw"):
+            return snap                      # firmware being checked / not ours: the Pico
+                                             # refuses writes; reconnecting would restart it
         if not snap.get("connected"):
             raise RuntimeError(snap.get("error") or "Pico: no Multigrain")
         return snap
@@ -499,7 +511,7 @@ class SwdBackend:
         for s in sounds:
             s["settings"]["sync"] = sync
         return {
-            "mode": self.mode, "connected": True, "error": None,
+            "mode": self.mode, "connected": True, "error": None, "firmware": L.FW_VERSION,
             "selected": L.u8(t, L.CUR_SOUND), "playing": L.u32(t, L.PLAYING),
             "edit_scene": "B" if L.u8(t, P.EDIT_SCENE) else "A",
             "morph": round(P.f32(t.read_memory(P.LIVE["MORPH"])), 4),

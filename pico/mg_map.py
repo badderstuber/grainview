@@ -18,6 +18,9 @@ MORPH = 0x20000690
 CUR_PROJECT, CUR_PRESET = 0x24025C74, 0x24025B18
 PROJECT_EXISTS, PRESET_EXISTS, PRESET_LOCKED = 0x240312F4, 0x240312E0, 0x240312E8
 SLOTS = 48
+# the firmware all this is for (mg_load.FW_*): its flash image's SHA-256 (pico/mgfw.py)
+FW_VERSION, FW_BASE, FW_SIZE = '1.4.8.0', 0x08000000, 634672
+FW_SHA256 = '2c1ce5ea2216aaed6a2bca0d2cab655e4293ca352a886ca405eed66fca51a71c'
 # FILE (pico/mgfile.py): file lists, loads, presets / projects - one-halt calls
 COUNTS, REC_LIST = 0x240272D4, 0x30010800
 LISTS = {0: 0x30000800, 1: 0x30008800}

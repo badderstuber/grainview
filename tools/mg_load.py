@@ -72,6 +72,21 @@ MAX_FILES = {0: 0x80, 1: 0x80, 2: 0x400}     # list sizes in RAM
 EMPTY_MASK = STATE + 0x40     # u32 bit n = sound n has audio  (FUN_080128a4)
 AUDIO_LEN = 0x20000160 + 0x378  # + n*0x10: u32 sample length  (FUN_080128a4)
 LOST_OFF = 0x4F4              # u8 per sound; non-zero = 0x0803e91c skips the reset
+# The firmware every address here was mapped on (Multigrain.1.4.8.0.bin, not in git: it's
+# Intellijel's). No version string in the image, so the build is known by the SHA-256 of
+# its flash image; anything else = hands off (grainview_server, the Pico's pico/mgfw.py).
+FW_VERSION = "1.4.8.0"
+FW_BASE, FW_SIZE = 0x08000000, 634672
+FW_SHA256 = "2c1ce5ea2216aaed6a2bca0d2cab655e4293ca352a886ca405eed66fca51a71c"
+
+
+def fw_ok(t):
+    """True if the module runs FW_VERSION: its flash image hashed (~2 s, read-only)."""
+    import hashlib
+    h = hashlib.sha256()
+    for a in range(FW_BASE, FW_BASE + FW_SIZE, 0x8000):
+        h.update(bytes(t.read_memory_block8(a, min(0x8000, FW_BASE + FW_SIZE - a))))
+    return h.hexdigest() == FW_SHA256
 
 
 def u8(t, a):

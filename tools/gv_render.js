@@ -32,7 +32,7 @@ const html = fs.readFileSync(path.join(dir, 'grainview_emulator.html'), 'utf8');
 const script = html.slice(html.lastIndexOf('<script>') + 8, html.lastIndexOf('</script>'));
 vm.runInContext(script + `
 ;globalThis.__gv = {set M(v) { M_ = v; }, set CAT(v) { CAT = v; }, st, fb, box, touchActive, vTouch, detectTouch, vSetup,
-  SETUP_GROUPS, gItems, vFile, openMenu, isStore, FOLDERS,
+  SETUP_GROUPS, gItems, linkMsg, vFile, openMenu, isStore, FOLDERS,
   views: {WAVE: vWave, PARAM: vParm, MOD: vMod, SETTINGS: vSet}};`,
   ctx, {filename: 'grainview_emulator.html'});
 
@@ -76,7 +76,7 @@ for (const t of snap._steps || [0]) {          // as the emulator's render(): he
   clock = t; b = G.fb(); (file ? G.vFile : setup ? G.vSetup : G.touchActive() ? G.vTouch : G.views[view])(b);
 }
 if (snap._flash) G.box(b, snap._flash[0], snap._flash[1]);
-else if (!snap.connected) G.box(b, 'NO MODULE LINK');
+else if (!snap.connected) G.box(b, G.linkMsg());
 const out = Buffer.alloc(b.p.length / 2);
 for (let j = 0; j < out.length; j++) out[j] = (b.p[2 * j] << 4) | b.p[2 * j + 1];
 process.stdout.write(out);

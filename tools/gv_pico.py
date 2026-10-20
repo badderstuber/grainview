@@ -580,6 +580,10 @@ def ui_cases(snap):
     out += [("flashLoading", case(lambda s, d: s.update(_flash=["Kick 03.wav", "LOADING"]))),
             ("flashPlain", case(lambda s, d: s.update(_flash=["SD busy", None])))]
     off = {"mode": "swd", "connected": False, "error": "Multigrain off", "_sound": n}
+    chk, unk = ({"mode": "swd", "connected": False, "error": "x", "fw": fw, "_sound": n}
+                for fw in ("checking", "unknown"))
+    out += [("fwChecking", chk), ("fwUnknown", unk), ("setupFw", case(lambda s, d: s.update(_setup=[3, 3, 5]))),
+            ("setupFwUnknown", {**unk, "_setup": [3, 3, 5]}), ("setupFwChecking", {**chk, "_setup": [3, 3, 5]})]
     return out + [("nolink", off), ("setupNolink", {**off, "_setup": [3, 3, 4]}),
                   ("fileNolink", {**off, "_file": {"folder": "ROOT", "cur": 2}})]
 

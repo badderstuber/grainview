@@ -213,6 +213,7 @@ class Poller:
         cp = sp.u8(M.CUR_PRESET)
         self.snap = {
             "mode": "swd", "connected": True, "error": None,
+            "firmware": M.FW_VERSION,         # (main.py only shows a poll once it checked that)
             "selected": sp.u8(M.CUR_SOUND), "playing": sp.u32(M.PLAYING),
             "edit_scene": "B" if sp.u8(M.EDIT_SCENE) else "A",
             "morph": round(sp.f32(M.MORPH), 4),
