@@ -5,9 +5,35 @@ Multigrain** (3U granular sampler) — it's hard to use without a screen and the
 audio-file workflow is confusing. This file is the single place to pick the
 project back up if I lose the chat session.
 
-_Last updated: 2026-10-13._
+_Last updated: 2026-10-20._
 
 ---
+
+## Update 2026-10-20 (evening) — first GRAINVIEW v1.0 module built + SWD link proven ✅
+
+- **Power bring-up** (main board, Pico out, USB-free): VSYS (Pico socket pin 39) = 5.0 V
+  unloaded, every other socket hole ~0 V. Pins 21/25/26 (GP16 / MOSI / DC) read ~0.9 V with
+  the Pico out — floating traces picked up by the 10 MΩ meter, harmless.
+- **Pico fitted** (USB end down, VSYS next to C3): screen, encoder + all 7 buttons OK through
+  the board-to-board link (`gv_pico.py keys`); live mirror from the emulator works.
+- Gotchas: a flaky Mac USB port made the Pico vanish / hang (another port fixed it); a stale
+  `grainview_server.py --mock` (system Python, no pyserial) was still holding port 8745;
+  the emulator tab must be open (it renders the frames).
+- **SWD through the module** (J3 → grey ribbon → JTRACE, ST-Link off): `pico/swdtest.py`
+  (bit-banged, read-only) reads DPIDR `0x6BA02477`, AP0 IDR `0x84770001`, CPUID `0x411FC271`
+  (Cortex-M7), **DBGMCU_IDCODE `0x20036450` → dev 0x450 = STM32H743/753, rev V** (settles the
+  MCU question below). VTREF sense on GP26 = 3.30 V. Run: `gv_pico.py quit` then
+  `mpremote run pico/swdtest.py`; replug / `mpremote reset` for the screen firmware.
+- **JTRACE pin 1 = the pin with the tiny white arrow** (bottom left as Leo views the board).
+- **PIO SWD driver `pico/swd.py`** (same night): PIO shifts bits, Python does the protocol,
+  block reads in a `@micropython.viper` loop on the PIO0 FIFO registers (plain Python was
+  ~280 µs/word). API: `connect / read32 / write32 / write8 / read_block32 / read_block8`.
+  Default 8 MHz SWCLK. `pico/swdbench.py`: the server's 8-sound poll (7.9 KB) = **25 ms at
+  8 MHz** (ST-Link: 120 ms), 20 ms at 12 MHz; the whole 634,672-byte flash reads back
+  identical to `Multigrain.1.4.8.0.bin` (sha256) at 8 and 12 MHz (2.3 s / 1.9 s).
+  `write8` follows ADI byte lanes but isn't hardware-tested yet (write32 is, on DCRDR).
+- Next: SWD commands in the USB protocol (`main.py`) → server "Pico" backend in place of
+  pyOCD (drops the ST-Link); then halt / registers / call on top (all DHCSR/DCRSR memory ops).
 
 ## Update 2026-10-13 (night) — GRAINVIEW breadboard alive ✅
 

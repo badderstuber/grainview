@@ -60,8 +60,9 @@ the PCBs copy the breadboard pin map exactly, so the breadboard firmware runs un
 - [x] OLED thickness ≈ 3.6 mm (2 mm glass + 1.6 mm PCB) → glass front ≈ 6.1 mm above the control PCB.
 - [x] Encoder body height = **7 mm** (Leo's EC11, feet → top of the metal frame) → G = 7 mm:
       glass ≈ 0.9 mm behind the panel, button caps ≈ 1.7 mm proud. Z stack settled.
-- [ ] **Pico-as-SWD-master check** (can run while the boards are at the fab): Raspberry Pi
-      `debugprobe` firmware on the Pico 2 → pyOCD reads the Multigrain through the Pico's GPIOs.
+- [x] **Pico-as-SWD-master check** (2026-10-20, on the built v1.0 module): `pico/swdtest.py`
+      bit-bangs SWD on GP14/15 through J3 → JTRACE and reads DPIDR / CPUID / DBGMCU_IDCODE
+      (STM32H743/753 rev V). No debugprobe (its default SWD pins are our encoder pins).
 - [x] Two boards (switches would sit on the Pico socket joints with one board).
 - [ ] Check the case depth (module ≈ 33 mm behind the panel).
 - [x] Route control + main → DRC.
