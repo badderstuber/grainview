@@ -476,6 +476,57 @@ def ui_cases(snap):
             ("grainsSync", case(grains(sync=0.25, p={"RATE": 0.7}))),
             ("grainsScan", case(grains(p={"SCAN": -0.9, "START": 0.2, "WRAP": 0.5}))),
             ("grainsDense", case(grains(link_rs=0, p={"RATE": 1.0, "SIZE": 0.9, "PITCH": 0.1})))]
+    def touch(k, src=None, val=None, **top):  # that knob just turned
+        def fn(s, d):
+            sc = s["edit_scene"]
+            if src:
+                d["mod"][sc][src][k] = 0.42 if val is None else val
+            elif val is not None:
+                d[sc][k] = val
+            s.update(top)
+            s["_touch"] = [k, src]
+        return fn
+    out += [("touch" + name, case(fn)) for name, fn in (
+        ("Size", touch("SIZE")), ("Start", touch("START")), ("Wrap", touch("WRAP")),
+        ("Scan", touch("SCAN", val=-0.4)), ("Tone", touch("TONE", val=0.6)),
+        ("Mod", touch("PITCH", "X", -0.55)), ("Sync", touch("RATE", sync=1, clock_period=0.5)))]
+
+    def turned(*moves, sound=None):          # polls: before, then after these knob moves
+        def fn(s, d):
+            sc = s["edit_scene"]
+            before = copy.deepcopy(s)
+            for k, src, dv in moves:
+                if src:
+                    d["mod"][sc][src][k] = round(d["mod"][sc][src][k] + dv, 4)
+                else:
+                    d[sc][k] = round(d[sc][k] + dv, 4)
+            if sound is not None:
+                before["selected"] = sound
+            s["_prev"] = [before, copy.deepcopy(before)]
+        return fn
+    out += [("turn" + name, case(fn)) for name, fn in (
+        ("Size", turned(("SIZE", None, 0.02))),
+        ("Tiny", turned(("SIZE", None, 0.003))),            # under TOUCH_EPS: nothing
+        ("Two", turned(("RATE", None, 0.01), ("PITCH", None, -0.03))),   # the bigger wins
+        ("Tie", turned(("WRAP", None, 0.05), ("SCAN", None, -0.05))),    # tie: the first
+        ("Bulk", turned(("START", None, 0.1), ("WRAP", None, 0.1), ("SIZE", None, 0.1))),
+        ("Mod", turned(("TONE", "Y", 0.2))),
+        ("Switch", turned(("SIZE", None, 0.2), sound=(n + 1) % 8)))]     # new sound: silent
+
+    def notes(*on):
+        return [i in on for i in range(12)]
+
+    def settings(cur, **vals):                # SETTINGS dived, cursor on row cur
+        def fn(s, d):
+            s["_dived"], s["_setCur"] = True, cur
+            d["settings"].update(vals)
+        return fn
+    out += [("set" + name, case(fn)) for name, fn in (
+        ("Top", settings(0)), ("Fine", settings(5, fine_tune=2.3)), ("End", settings(9)),
+        ("QuantMaj", settings(6, quantizer={"notes": notes(0, 2, 4, 5, 7, 9, 11), "root": 0})),
+        ("QuantOdd", settings(6, quantizer={"notes": notes(2, 3), "root": 2})),
+        ("Chrom", settings(6, quantizer={"notes": notes(*range(12)), "root": 5})),
+        ("Unmapped", settings(3, link_sp=None, choke=None)))]
     return out + [("nolink", {"connected": False, "error": "Multigrain off", "_sound": n})]
 
 
@@ -541,7 +592,7 @@ def _ui_views(link, views, tag, k, snap=None):
 def main():
     ap = argparse.ArgumentParser(description="GRAINVIEW Pico screen helper")
     ap.add_argument("cmd", choices=["deploy", "quit", "keys", "swd", "poll", "ui"])
-    ap.add_argument("views", nargs="*", help="ui: views to check (default WAVE PARAM MOD)")
+    ap.add_argument("views", nargs="*", help="ui: views to check (default: all 4)")
     ap.add_argument("--all-sounds", action="store_true", help="ui: check sounds 1-8")
     ap.add_argument("--cases", action="store_true", help="ui: check made-up edge cases")
     ap.add_argument("--port", help="serial port (default: first Raspberry Pi board)")
@@ -567,7 +618,7 @@ def main():
     elif a.cmd == "poll":
         poll_check(port, a.khz)
     elif a.cmd == "ui":
-        ui_check(port, a.views or ["WAVE", "PARAM", "MOD"], a.all_sounds, a.cases)
+        ui_check(port, a.views or ["WAVE", "PARAM", "MOD", "SETTINGS"], a.all_sounds, a.cases)
     elif a.cmd == "keys":
         link = PicoLink(port)
         q = link.subscribe()

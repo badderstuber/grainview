@@ -400,7 +400,7 @@ try:
             packet()
         elif mg["auto"] and time.ticks_diff(now, mg["next"]) >= 0:
             mg_poll()
-        elif not gv["own"] and ui_own() or gv["ui"] and gv["ui"].flash_due():
+        elif not gv["own"] and ui_own() or gv["ui"] and gv["ui"].wake_due():
             ui_draw()                         # the Mac went quiet / a flash box ran out
         elif gv["own"] and time.ticks_diff(now, gv["frame"]) >= 0:
             late = time.ticks_diff(now, gv["frame"])

@@ -479,9 +479,11 @@ function detectTouch(){const s=snd();
   const key=st.sound+st.scene,P=s[st.scene],Md=s.mod[st.scene];
   if(!tb||tb.key!==key){tb={key,p:{...P},m:JSON.parse(JSON.stringify(Md))};return;}
   const hits=[];
-  for(const k of MKEYS){if(Math.abs(P[k]-tb.p[k])>TOUCH_EPS)hits.push({k,d:Math.abs(P[k]-tb.p[k])});}
+  // d = the move in 1e-4 steps (values come with 4 decimals): equal moves tie for real,
+  // the first wins - not float noise (the Pico port, 32-bit floats, picks the same)
+  for(const k of MKEYS){if(Math.abs(P[k]-tb.p[k])>TOUCH_EPS)hits.push({k,d:Math.round(Math.abs(P[k]-tb.p[k])*1e4)});}
   for(const src of SOURCES)for(const k of MKEYS)
-    if(Math.abs(Md[src][k]-tb.m[src][k])>TOUCH_EPS)hits.push({k,src,d:Math.abs(Md[src][k]-tb.m[src][k])});
+    if(Math.abs(Md[src][k]-tb.m[src][k])>TOUCH_EPS)hits.push({k,src,d:Math.round(Math.abs(Md[src][k]-tb.m[src][k])*1e4)});
   for(const h of hits){if(h.src)tb.m[h.src][h.k]=Md[h.src][h.k];else tb.p[h.k]=P[h.k];}
   if(hits.length>=BULK){st.touch=null;return;}      // preset load etc. (also cancels a split one)
   if(!hits.length||!st.touchOn)return;

@@ -9,6 +9,28 @@ _Last updated: 2026-10-20 (late)._
 
 ---
 
+## Update 2026-10-21 (early) — knob touch + SETTINGS on the Pico ✅
+
+- **Knob touch** (the emulator's detectTouch, every poll): a stored scene value or mod depth
+  of the focused sound moving by > 0.004 = that knob; >= 3 at once (preset load...) =
+  silent; a new sound / scene resets the baselines. Shows for 1.5 s:
+  - **WAVE**: the status-line readout ("SIZE 3.35s", "X>PITCH -.55") + the turned
+    START / WRAP marker 2 px wide, SCAN's playhead solid;
+  - **PARAM / MOD / SETTINGS** (not dived): the **hero** - name, value in the 16x32 font,
+    position bar (bipolar from the centre), the other scene's value.
+- **SETTINGS view**: the focused sound's settings (catalogue `pico/gv_cat.py`, generated
+  from gv_settings.json), values as the emulator words them (quantizer "C MAJ" / "D 2nt"
+  / CHROM, fine tune "+2.3st", unmapped "-"), scroll mark. PUSH dives in (cursor, the
+  panel shortcut in the status line), encoder moves, PUSH on a row = "read-only (live)"
+  (as the emulator on a live module), BACK backs out, VIEW resets.
+- **Parity:** new test hooks `_touch`, `_dived`, `_setCur`, and `_prev` (earlier polls fed
+  through the detection on both sides: small turn, under the threshold, two knobs, a tie,
+  bulk, a mod depth, sound switch). **164 frames MATCH** (41 cases x 4 views) + live 4 views.
+  The tie case found float noise deciding equal moves (JS doubles vs the Pico's 32-bit
+  floats): both now compare moves in 1e-4 steps (emulator changed too, 2 lines).
+- WAVE still **~29 fps** with the detection.
+- Not ported yet: SETUP overlay, FILE browser (+ loading), A/B scene, Sel plays.
+
 ## Update 2026-10-20 (night, last) — WAVE grain dots animate on the Pico ✅
 
 - **Grain dots ported** (the emulator's grainsStep / grains / shapeEnv): launched from the
