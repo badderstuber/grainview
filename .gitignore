@@ -57,3 +57,6 @@ mock_sd/
 *.log
 scratch/
 tmp/
+
+# --- GRAINVIEW WiFi credentials (copy pico/wifi.example.json) ---
+pico/wifi.json

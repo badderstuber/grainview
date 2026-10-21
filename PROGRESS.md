@@ -9,6 +9,41 @@ _Last updated: 2026-10-21._
 
 ---
 
+## Update 2026-10-21 (night) — WiFi remote panel ✅ (grainview.local)
+
+- **What:** the GRAINVIEW panel in a browser (phone / desktop): the OLED's live frames + the 7
+  buttons + the encoder (drag round it / tap = PUSH / wheel; desktop keys as the emulator's).
+  One UI state with the real panel (chosen over a separate full emulator: no extra SWD load,
+  pixel-exact for free). Also shows the Mac's frames when the Mac drives the screen.
+- **`pico/gvnet.py`** (new): joins the WiFi in `pico/wifi.json` (gitignored; copy
+  `wifi.example.json`) as **grainview.local** (mDNS), retrying for 15 s, else runs its own
+  hotspot **GRAINVIEW** / password `grainview` (http://192.168.4.1). Once joined, a lost WiFi
+  is rejoined forever, never swapped for the hotspot; SETUP > GRAINVIEW > WiFi OFF/ON starts
+  over. Non-blocking HTTP + WebSocket server stepped from main.py's loop: binary frames out =
+  `r0 n` + changed rows (max 20 fps), text in = `B BACK` / `E +1` -> the same `ui_key` / `ui_enc`
+  as the panel (+ `@B`/`@E` to the Mac). Max 3 browsers; one that stops taking frames for 2 s
+  is dropped (else it would freeze the others). Runs under CPython too (`wifi=False`), how it
+  was tested offline first.
+- **`pico/gv_web.html`** (new; deploy gzips it, 3.9 KB): white-FR4 panel look, live/reconnecting
+  status, closes the socket while the tab is hidden.
+- **SETUP > GRAINVIEW**: `WiFi` ON/OFF (in gv_cfg.json, default ON) + `IP` (JOINING / the address /
+  `AP 192.168.4.1` / OFF), Pico + emulator; the Pico reports it to the Mac as `@W ...` (PicoLink
+  `status()["wifi"]`, emulator IP row). Parity: **315 frames MATCH** (+5 WiFi cases).
+- **Deploy** (`gv_pico.py deploy`) now also copies `gv_web.html.gz` + `pico/wifi.json` if present.
+- **Measured on hardware (Mac on the same WiFi):** joins in ~5-7 s; page 0.25 s; stream 17 fps
+  (~85 KB/s on WAVE); **panel unchanged while streaming** (27 fps, poll 16 ms). Press -> new
+  screen in the browser ~95 ms when the Pico is idle (= the redraw itself), ~200 ms when the
+  press lands during a poll + the redraw static views do after every poll - the same wait a
+  real button has. Network: ping 3.6 ms, WS ping 5-40 ms.
+- **Fixed on the way:** 16 KB of permanent buffers ran the parity test out of heap -> one 8 KB
+  copy, only while a browser is connected (frames sent straight from it, TCP_NODELAY); a new
+  frame's tail waited a whole loop pass (~100 ms) -> flushed for up to 15 ms; pong could land
+  mid-frame; `[::-1]` isn't in MicroPython; one failed join no longer means hotspot.
+- WiFi costs no MicroPython heap of its own (the radio stack is in C); the module is 6.9 KB.
+  Power: the radio adds tens of mA on +12 V through the 5 V regulator (fine for the 7805).
+- Not done: the hotspot doesn't retry the home WiFi by itself (toggle WiFi OFF/ON, or power up
+  again); no auth on the page (anyone on the WiFi / hotspot can press buttons).
+
 ## Update 2026-10-21 (late) — firmware version check ✅ (Pico + Mac server)
 
 - No version string in the image, so the build is known by the **SHA-256 of its flash

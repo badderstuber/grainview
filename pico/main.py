@@ -14,7 +14,11 @@
 #   'D' + seq + op + len(u16) + body    SWD to the Multigrain (pico/swd.py), see swd_op()
 #                             (op 'S' = the latest poll snapshot as JSON, 'v' = a UI frame)
 # Pico -> Mac, text lines:  "@E +1" (encoder steps)  "@B BACK 1" (button down / 0 = up)
+#   "@W 192.168.1.20"         WiFi status (SETUP > GRAINVIEW > IP; also after 'H')
 #   "@D <seq> <status> <n>" + n raw bytes   SWD reply (status 0 ok, 1 = n bytes of error text)
+#
+# WiFi (gvnet.py, unless SETUP > GRAINVIEW > WiFi is OFF): the same panel in a browser - the
+# OLED's frames out, presses in, as if on the panel (the Mac hears them too).
 #
 # Ctrl-C is disabled while running (frames are binary). Escape hatch: hold BACK while
 # plugging in and it stops before taking over, leaving the REPL free.
@@ -269,7 +273,7 @@ def mg_fix():
 # --- the Pico's own UI (gv_ui.py) ---
 MAC_MS = 3000                                 # no Mac frame for this long -> our own UI
 FRAME_MS = 33                                 # WAVE's grain animation, ~30 fps
-gv = {"ui": None, "mac_at": None, "own": False, "frame": 0,
+gv = {"ui": None, "mac_at": None, "own": False, "frame": 0, "net": None,
       "perf": [0, 0, 0, 0, 0, time.ticks_ms(), 0, 0, 0, 0, 0]}  # anim frames, anim us, push us,
                     # polls, poll ms, since, all frames pushed, gc us, loops, last push, max gap
 
@@ -288,6 +292,7 @@ def ui_draw():
     if gv["ui"] is None:
         from gv_ui import UI
         gv["ui"] = UI()
+        gv["ui"].net, gv["ui"].on_wifi = gv["net"], net_set
     gv["ui"].render(ui_snap())
     ui_push()
     gv["frame"] = time.ticks_add(time.ticks_ms(), FRAME_MS)   # this was a frame too
@@ -362,6 +367,46 @@ def ui_enc(n):
     if ui_own() and gv["ui"] is not None:
         gv["ui"].enc(n)
         ui_draw()
+
+# --- WiFi: the panel in a browser (gvnet.py) ---
+net = [None]
+KEYS = [name for name, _ in buttons]
+
+def net_key(k):
+    """A press from a browser = the panel's own (steps, or a button name)."""
+    if isinstance(k, int):
+        print("@E %+d" % k)
+        ui_enc(k)
+    elif k in KEYS:
+        print("@B %s 1" % k)
+        print("@B %s 0" % k)
+        ui_key(k)
+
+def net_set(on):
+    """WiFi on / off: at power-up, and SETUP > GRAINVIEW > WiFi (whose redraw follows)."""
+    if on and net[0] is None:
+        import gvnet
+        try:
+            net[0] = gvnet.Net(oled.buffer, net_key)
+        except Exception as e:                # no radio / bad wifi.json: the panel goes on
+            sys.print_exception(e)
+            net_show("ERROR", False)
+            return
+    elif not on and net[0] is not None:
+        net[0].stop()
+        net[0] = None
+    net_show(None, False)
+
+def net_show(text=None, draw=True):
+    """The WiFi status -> SETUP > GRAINVIEW > IP + the Mac, when it changes."""
+    text = text or (net[0].text if net[0] else "OFF")
+    if text != gv["net"]:
+        gv["net"] = text
+        print("@W " + text)
+        if gv["ui"] is not None:
+            gv["ui"].net = text
+            if draw and gv["ui"].overlay == "SETUP":
+                ui_draw()
 
 def swd_op(op, body):
     """One SWD request -> reply bytes. All little-endian; addresses/words u32.
@@ -505,6 +550,8 @@ def packet():
         oled.contrast(one[0])
     elif t == 0x48:                           # 'H'
         print("@HELLO 1")
+        if gv["net"]:
+            print("@W " + gv["net"])
     elif t == 0x44:                           # 'D'
         swd_packet()
     elif t == 0x51:                           # 'Q'
@@ -512,10 +559,22 @@ def packet():
 
 state = [p() for _, p in buttons]
 changed = [0] * len(buttons)
+try:
+    with open("gv_cfg.json") as f:            # gv_ui's settings: WiFi unless it's OFF
+        wifi = json.load(f).get("wifi", 1) != 0
+except (OSError, ValueError):
+    wifi = True
+net_set(wifi)                                 # (~1 s: the radio boots; the splash stays)
 micropython.kbd_intr(-1)
 try:
     while True:
         gv["perf"][8] += 1
+        if net[0] is not None:
+            try:
+                net[0].step()
+            except Exception as e:            # a browser's trouble is never the panel's
+                sys.print_exception(e)
+            net_show()
         if es[2]:
             irq = machine.disable_irq()
             n = es[2]
@@ -568,6 +627,8 @@ except Exception as e:
     sys.print_exception(e)
 finally:
     micropython.kbd_intr(3)
+    if net[0] is not None:
+        net[0].stop()
     if dbg[0] is not None:
         dbg[0].close()
     for p in (enc_a, enc_b):

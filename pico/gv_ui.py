@@ -226,6 +226,8 @@ class UI:
         self.files_ok, self.root_counts = False, {}   # list read / WAV counts at the root
         self.menu = None                      # slot menu: [title, items, cur, armed]
         self.sel_plays = False                # SOUND<> also switches playback
+        self.wifi_on, self.net = True, None   # WiFi wanted / its status (main.py sets it)
+        self.on_wifi = None                   # main.py: turn WiFi on / off
         self.load_cfg()
         # SETUP > GRAINVIEW (the emulator's GV_SETTINGS; one wave style + font set here)
         self.gv = (
@@ -237,7 +239,10 @@ class UI:
             {"label": "Font", "type": "enum", "options": ("Spleen",), "get": lambda: 0},
             {"label": "Link", "type": "info", "get": self.link_text},
             {"label": "Firmware", "type": "info",   # the module's, as checked (main.py)
-             "get": lambda: self.snap and (self.snap.get("firmware") or self.snap.get("fw")) or "-"})
+             "get": lambda: self.snap and (self.snap.get("firmware") or self.snap.get("fw")) or "-"},
+            {"label": "WiFi", "type": "enum", "options": ONOFF,   # the panel in a browser (gvnet.py)
+             "get": lambda: int(self.wifi_on), "set": self.set_wifi},
+            {"label": "IP", "type": "info", "get": lambda: self.net or "-"})
         self.testing = False
 
     # ---- data ----
@@ -596,15 +601,22 @@ class UI:
             with open(CFG) as f:
                 c = json.load(f)
             self.sel_plays, self.touch_on = bool(c.get("selPlays")), c.get("touchOn", 1) != 0
+            self.wifi_on = c.get("wifi", 1) != 0
         except (OSError, ValueError):
             pass
 
     def save_cfg(self):
         try:
             with open(CFG, "w") as f:
-                json.dump({"selPlays": int(self.sel_plays), "touchOn": int(self.touch_on)}, f)
+                json.dump({"selPlays": int(self.sel_plays), "touchOn": int(self.touch_on),
+                           "wifi": int(self.wifi_on)}, f)
         except OSError as x:
             self.flash("not saved: " + str(x))
+
+    def set_wifi(self, v):
+        self.wifi_on = bool(v)
+        if self.on_wifi:
+            self.on_wifi(self.wifi_on)
 
     # ---- FILE (the card; PRESETS / PROJECTS = slots + a menu) ----
     def store(self):
@@ -942,9 +954,10 @@ class UI:
         kept = (self.touch, self.tb, self.dived, self.set_cur, self.overlay, self.setup, self.edit,
                 self.sel_plays, self.touch_on, self.folder, self.files, self.file_cur,
                 self.files_ok, self.root_counts, self.menu, self.flash_msg, self.flash_label,
-                self.flash_until)
+                self.flash_until, self.wifi_on, self.net)
         gv = snap.get("_gv") or {}            # GRAINVIEW's own settings: the defaults unless given
         self.sel_plays, self.touch_on = bool(gv.get("selPlays")), gv.get("touchOn", 1) != 0
+        self.wifi_on, self.net = gv.get("wifi", 1) != 0, gv.get("net")
         su = snap.get("_setup")
         self.overlay, self.setup = ("SETUP", list(su)) if su else (None, [None, 0, 0])
         self.edit = None
@@ -984,7 +997,7 @@ class UI:
             (self.touch, self.tb, self.dived, self.set_cur, self.overlay, self.setup, self.edit,
              self.sel_plays, self.touch_on, self.folder, self.files, self.file_cur,
              self.files_ok, self.root_counts, self.menu, self.flash_msg, self.flash_label,
-             self.flash_until) = kept
+             self.flash_until, self.wifi_on, self.net) = kept
             self.g_list, self.g_acc, self.g_t, self.g_key, self.g_ph = [], 0, None, None, 0
             self.bg_key = None
 

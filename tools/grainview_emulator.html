@@ -132,7 +132,9 @@ const GV_SETTINGS=[                              // local: this browser now, the
   {label:'Font',type:'enum',options:Object.keys(FONT_SETS),get:()=>Object.keys(FONT_SETS).indexOf(st.fontSet),
    set:v=>{st.fontSet=Object.keys(FONT_SETS)[v];localStorage.gvFontSet=st.fontSet;}},
   {label:'Link',type:'info',get:()=>M_?M_.mode.toUpperCase()+(M_.connected?'':' X'):'-'},
-  {label:'Firmware',type:'info',get:()=>M_&&(M_.firmware||M_.fw)||'-'}];   // the module's, as checked
+  {label:'Firmware',type:'info',get:()=>M_&&(M_.firmware||M_.fw)||'-'},    // the module's, as checked
+  {label:'WiFi',type:'enum',options:onoff,get:()=>+st.wifiOn,set:v=>{st.wifiOn=!!v;}},   // the Pico's (pico/gvnet.py)
+  {label:'IP',type:'info',get:()=>st.net!=null?st.net:M_&&M_.pico&&M_.pico.wifi||'-'}];  // its status, via the server
 const SETUP_GROUPS=[['MODULE','module'],['PRESET','preset'],['SAMPLE',null],['GRAINVIEW','gv']];
 function gItems(g){return g==='gv'?GV_SETTINGS:(CAT&&CAT[g])||[];}
 // current value (null = unknown: not mapped on a live module yet)
@@ -200,7 +202,7 @@ async function poll(){
   render();setTimeout(poll,150);}
 
 // ---------- UI state ----------
-const st={view:'WAVE', overlay:null, dived:false, sound:0, scene:'A', selPlays:false,
+const st={view:'WAVE', overlay:null, dived:false, sound:0, scene:'A', selPlays:false, wifiOn:true, net:null,
   files:[], folder:'', rootCounts:{}, filesOk:false, filesReq:0, fileCur:0, menu:null, setCur:0, edit:null, quant:null,
   setup:{g:null,gc:0,cur:0}, flash:null, flashT:0, busy:0, localT:0,
   fontSet:FONT_SETS[localStorage.gvFontSet]?localStorage.gvFontSet:'Spleen',

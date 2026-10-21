@@ -10,6 +10,7 @@ polls the module itself (pico/mgpoll.py); PicoTarget.snapshot() fetches that.
 
 CLI:
     tools/venv/bin/python tools/gv_pico.py deploy   # regenerate pico/mg_map.py, copy pico/*.py
+                                                    # + the web page (gzipped) + pico/wifi.json
                                                     # to the board + restart it
     tools/venv/bin/python tools/gv_pico.py quit     # stop the screen, free the REPL for mpremote
     tools/venv/bin/python tools/gv_pico.py keys     # print key events (screen test)
@@ -24,6 +25,7 @@ CLI:
 """
 import argparse
 import glob
+import gzip
 import json
 import os
 import queue
@@ -83,6 +85,7 @@ class PicoLink:
         self.last = None            # last frame from the browser (re-sent on reconnect)
         self.sent = None            # what the panel shows now
         self.frames = 0
+        self.wifi = None            # the Pico's WiFi status ("@W ...")
         self.swd_lock = threading.Lock()    # one SWD request in flight
         self.seq = 0
         self.replies = queue.Queue()
@@ -90,7 +93,8 @@ class PicoLink:
 
     # ----- status / events -----
     def status(self):
-        return {"connected": self.ser is not None, "port": self.port, "frames": self.frames}
+        return {"connected": self.ser is not None, "port": self.port, "frames": self.frames,
+                "wifi": self.wifi}
 
     def subscribe(self):
         q = queue.Queue(maxsize=256)
@@ -222,6 +226,8 @@ class PicoLink:
         elif s.startswith("@B "):
             name, _, down = s[3:].rpartition(" ")
             self._emit({"t": "btn", "n": name, "down": down == "1"})
+        elif s.startswith("@W "):
+            self.wifi = s[3:]       # SETUP > GRAINVIEW > IP (pico/gvnet.py)
         elif s.startswith("@HELLO") or s.startswith("@BYE"):
             pass
         elif s:
@@ -547,7 +553,11 @@ def ui_cases(snap):
         ("Pre", setup(1, 1, 2)), ("GvTop", setup(3, 3)), ("GvLink", setup(3, 3, 4)),
         ("GvFw", setup(3, 3, 5)), ("GvEdit", setup(3, 3, 1, edit=0)),
         ("GvEditOn", setup(3, 3, 0, edit=1)),
-        ("GvSet", setup(3, 3, 2, gv={"selPlays": 1, "touchOn": 0})))]
+        ("GvSet", setup(3, 3, 2, gv={"selPlays": 1, "touchOn": 0})),
+        ("GvWifi", setup(3, 3, 6, gv={"net": "JOINING"})), ("GvWifiEdit", setup(3, 3, 6, edit=0)),
+        ("GvWifiOff", setup(3, 3, 6, gv={"wifi": 0, "net": "OFF"})),
+        ("GvIp", setup(3, 3, 7, gv={"net": "192.168.178.123"})),
+        ("GvAp", setup(3, 3, 7, gv={"net": "AP 192.168.4.1"})))]
     wavs = ["Kick %02d.wav" % i for i in range(1, 12)]
     wavs[3] = "a_really_long_sample_name_in_the_list.wav"
     many = ["Loop%03d.wav" % i for i in range(30)]
@@ -670,8 +680,14 @@ def main():
         quit_screen(port)
         mp = os.path.join(os.path.dirname(sys.executable), "mpremote")
         files = sorted(glob.glob(os.path.join(PICO_DIR, "*.py")))
-        subprocess.run([mp, "connect", port, "cp", *files, ":", "+", "reset"], check=True)
-        print("deployed:", ", ".join(os.path.basename(f) for f in files))
+        wifi = os.path.join(PICO_DIR, "wifi.json")      # (not in git: the WiFi password)
+        files += [wifi] if os.path.exists(wifi) else []
+        with tempfile.TemporaryDirectory() as tmp:     # the page, gzipped: ~3x less to send
+            gz = os.path.join(tmp, "gv_web.html.gz")
+            with open(os.path.join(PICO_DIR, "gv_web.html"), "rb") as f, gzip.open(gz, "wb", 9) as o:
+                o.write(f.read())
+            subprocess.run([mp, "connect", port, "cp", *files, gz, ":", "+", "reset"], check=True)
+        print("deployed:", ", ".join(os.path.basename(f) for f in files + [gz]))
     elif a.cmd == "swd":
         swd_check(port, a.khz)
     elif a.cmd == "poll":

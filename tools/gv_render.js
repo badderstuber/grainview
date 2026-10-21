@@ -7,7 +7,7 @@
 // step with those (grain dots), the last frame is the output - as pico/gv_ui.py does.
 // "_touch": [knob, mod source or null], "_dived", "_setCur": that UI state for the test;
 // "_setup": [group or null, group cursor, row] opens SETUP (view "SETUP": the groups), "_edit":
-// the cursor row's value being edited, "_gv": {selPlays, touchOn} (else the defaults);
+// the cursor row's value being edited, "_gv": {selPlays, touchOn, wifi, net} (else the defaults);
 // "_prev": earlier snapshots fed through detectTouch first (as the poll does).
 // "_file": {folder ("ROOT" | a folder), files (a WAV folder's names), cur, ok, counts,
 // menu: [cur, armed]} opens FILE there (view "FILE" alone: the root); "_flash": [msg, label].
@@ -48,6 +48,7 @@ if (setup) {
 }
 const gv = snap._gv || {};
 G.st.selPlays = !!gv.selPlays; G.st.touchOn = gv.touchOn !== 0;
+G.st.wifiOn = gv.wifi !== 0; G.st.net = gv.net != null ? gv.net : null;
 G.CAT = JSON.parse(fs.readFileSync(path.join(dir, 'gv_settings.json'), 'utf8'));
 if (snap._touch) G.st.touch = {k: snap._touch[0], src: snap._touch[1], t: Date.now()};
 G.st.dived = !!snap._dived; G.st.setCur = snap._setCur || 0;

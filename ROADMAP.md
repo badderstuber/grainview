@@ -1,6 +1,6 @@
 # Multigrain companion app — roadmap & tasks
 
-_Last updated: 2026-10-11._
+_Last updated: 2026-10-21._
 
 ## Vision
 
@@ -187,7 +187,13 @@ web app over WiFi as an optional big-screen view.)
 - [x] Hardware: eurorack PCB + panel (KiCad, `hardware/`, docs/HARDWARE.md), 8 HP, bus
       power → 3.3 V, VTREF sense only (no back-power), SWD header to ribbon. Ordered from
       JLC 2026-10-14, v1.0 **built and running** the Pico UI (2026-10-20/21).
-- [ ] Optional Pico W: serve the Phase-2 web app/API over WiFi too.
+- [x] **WiFi remote panel** (2026-10-21, decided over the full emulator/API): the Pico serves
+      `pico/gv_web.html` at **grainview.local** (`pico/gvnet.py`) = the live OLED frames + the 7
+      buttons + encoder, one UI state shared with the real panel. Home WiFi from `pico/wifi.json`
+      (gitignored; `wifi.example.json`), else its own hotspot GRAINVIEW / `grainview`.
+      SETUP > GRAINVIEW > WiFi ON/OFF + IP. Hardware-tested from the Mac; panel unaffected.
+- [ ] Maybe: the full emulator over WiFi (own UI state on the phone; needs the JSON API on
+      the Pico + full 8-sound polls, which slow WAVE) - only if the remote panel isn't enough.
 
 ### GRAINVIEW spec — LOCKED 2026-10-11
 - **Display:** 128×128 **greyscale** OLED (SSD1327, 1.5"). Elektron-style mono look.

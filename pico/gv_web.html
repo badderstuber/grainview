@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#151617">
+<title>GRAINVIEW</title>
+<!-- The GRAINVIEW panel over WiFi, served by the Pico (pico/gvnet.py). The screen is the
+     OLED's own frames (WebSocket /ws: r0 n + rows, 2 px per byte, left px high nibble);
+     keys go back as "B NAME" / "E +1", exactly as the panel's buttons + encoder. -->
+<style>
+:root{--bg:#e9e9e6;--ink:#2b2d2f;--dim:#7b7f83;--face:#f7f7f4;--silk:#111;--edge:#d4d4cf;
+  --cap:#1b1c1d;--cap-hi:#3a3c3e;--ok:#3f9b5a;--bad:#c4573c;color-scheme:light dark}
+@media (prefers-color-scheme:dark){:root{--bg:#151617;--ink:#d6dade;--dim:#7d858c;--edge:#2a2c2e}}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--ink);
+  font:14px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+body{min-height:100vh;display:flex;justify-content:center;align-items:flex-start;
+  padding:max(16px,env(safe-area-inset-top)) 16px 24px;touch-action:manipulation;
+  -webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
+main{width:100%;max-width:380px}
+.top{display:flex;justify-content:space-between;align-items:baseline;margin:0 4px 10px}
+.top b{letter-spacing:.18em;font-weight:700;font-size:13px}
+.st{font-size:12px;color:var(--dim)}
+.st::before{content:"";display:inline-block;width:7px;height:7px;border-radius:50%;
+  margin-right:6px;background:var(--bad);vertical-align:1px}
+.st.live::before{background:var(--ok)}
+.panel{background:var(--face);border:1px solid var(--edge);border-radius:10px;
+  padding:18px 18px 22px;box-shadow:0 1px 2px rgba(0,0,0,.08),0 8px 24px rgba(0,0,0,.08)}
+.win{position:relative;background:#000;border-radius:4px;padding:6%;
+  box-shadow:inset 0 0 0 1px #000,0 0 0 3px #e2e2de}
+canvas{display:block;width:100%;aspect-ratio:1;image-rendering:pixelated;image-rendering:crisp-edges}
+.off{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  color:#9aa;font-size:13px;letter-spacing:.08em;background:rgba(0,0,0,.72);border-radius:4px}
+.off[hidden]{display:none}
+.ctl{display:grid;grid-template-columns:1fr 1fr;gap:14px 0;margin-top:22px}
+.k{display:flex;flex-direction:column;align-items:center;gap:7px}
+.k span{font-size:11px;font-weight:600;letter-spacing:.1em;color:var(--silk)}
+.cap{width:52px;height:52px;border-radius:50%;border:0;padding:0;cursor:pointer;
+  background:radial-gradient(circle at 40% 35%,var(--cap-hi),var(--cap) 62%);
+  box-shadow:0 0 0 5px #e4e4e0,0 2px 3px rgba(0,0,0,.35);transition:transform .05s}
+.cap.down,.cap:active{transform:scale(.93);box-shadow:0 0 0 5px #e4e4e0,0 1px 1px rgba(0,0,0,.4)}
+.cap:focus-visible,.knob:focus-visible{outline:2px solid #4a8fd8;outline-offset:6px}
+.knob{--r:0deg;width:74px;height:74px;border-radius:50%;cursor:grab;touch-action:none;
+  background:radial-gradient(circle at 42% 36%,#4a4c4e,#1a1b1c 66%);
+  box-shadow:0 0 0 4px #e4e4e0,0 3px 6px rgba(0,0,0,.4);position:relative;transform:rotate(var(--r))}
+.knob::after{content:"";position:absolute;left:50%;top:7px;width:3px;height:16px;margin-left:-1.5px;
+  border-radius:2px;background:#e8e8e4}
+.knob.down{cursor:grabbing}
+.k.enc span{margin-top:-4px}
+.keys{margin:14px 4px 0;font-size:12px;color:var(--dim);text-align:center}
+@media (hover:none){.keys{display:none}}
+</style>
+</head>
+<body>
+<main>
+  <div class="top"><b>GRAINVIEW</b><span id="st" class="st">connecting</span></div>
+  <div class="panel">
+    <div class="win"><canvas id="oled" width="128" height="128"></canvas>
+      <div id="off" class="off">CONNECTING</div></div>
+    <div class="ctl">
+      <div class="k"><span>BACK</span><button class="cap" data-k="BACK" aria-label="BACK"></button></div>
+      <div class="k enc"><span>PUSH</span><div id="knob" class="knob" tabindex="0" role="slider"
+        aria-label="encoder: drag to turn, tap to push"></div></div>
+      <div class="k"><span>VIEW</span><button class="cap" data-k="VIEW" aria-label="VIEW"></button></div>
+      <div class="k"><span>FILE</span><button class="cap" data-k="FILE" aria-label="FILE"></button></div>
+      <div class="k"><span>SOUND ‹</span><button class="cap" data-k="SOUND&lt;" aria-label="SOUND left"></button></div>
+      <div class="k"><span>SOUND ›</span><button class="cap" data-k="SOUND&gt;" aria-label="SOUND right"></button></div>
+      <div class="k"><span>A/B</span><button class="cap" data-k="A/B" aria-label="A/B"></button></div>
+      <div class="k"><span>SETUP</span><button class="cap" data-k="SETUP" aria-label="SETUP"></button></div>
+    </div>
+  </div>
+  <p class="keys">arrows turn · enter push · esc back · v view · f file · , . sound · b a/b · s setup</p>
+</main>
+<script>
+const $=id=>document.getElementById(id), cv=$('oled'), cx=cv.getContext('2d'), img=cx.createImageData(128,128);
+const LUT=[...Array(16)].map((_,v)=>{const q=v/15*255;return [q*.92|0,q*.98|0,q|0];});  // as the emulator
+for(let i=3;i<img.data.length;i+=4)img.data[i]=255;
+cx.putImageData(img,0,0);
+
+// ---------- link: frames in, keys out; closed while the page is hidden ----------
+let ws=null, retry=0, timer=null;
+function connect(){
+  clearTimeout(timer);
+  if(document.hidden||ws)return;
+  ws=new WebSocket(`ws://${location.host}/ws`); ws.binaryType='arraybuffer';
+  ws.onopen=()=>{retry=0;live(true);};
+  ws.onmessage=e=>{if(typeof e.data==='string')return;
+    const d=new Uint8Array(e.data), r0=d[0], n=d[1], px=img.data;
+    for(let j=2,p=r0*512;j<2+n*64;j++){const v=d[j];
+      let c=LUT[v>>4];px[p]=c[0];px[p+1]=c[1];px[p+2]=c[2];
+      c=LUT[v&15];px[p+4]=c[0];px[p+5]=c[1];px[p+6]=c[2];p+=8;}
+    cx.putImageData(img,0,0,0,r0,128,n);};
+  ws.onclose=()=>{ws=null;live(false);
+    if(!document.hidden)timer=setTimeout(connect,Math.min(5000,400*++retry));};
+}
+function live(on){$('st').textContent=on?'live · '+location.host:'reconnecting';
+  $('st').classList.toggle('live',on);$('off').hidden=on;if(!on)$('off').textContent='RECONNECTING';}
+document.addEventListener('visibilitychange',()=>{
+  if(document.hidden){if(ws)ws.close();}else{retry=0;connect();}});
+function send(t){if(ws&&ws.readyState===1)ws.send(t);}
+function key(k){send('B '+k);if(navigator.vibrate)navigator.vibrate(6);}
+function turn(n){send('E '+(n>0?'+':'')+n);rot+=n*STEP;knob.style.setProperty('--r',rot+'deg');}
+
+// ---------- buttons: on press, as the panel ----------
+for(const b of document.querySelectorAll('.cap')){
+  b.addEventListener('pointerdown',e=>{e.preventDefault();b.classList.add('down');key(b.dataset.k);});
+  for(const t of ['pointerup','pointerleave','pointercancel'])b.addEventListener(t,()=>b.classList.remove('down'));
+  b.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();e.stopPropagation();key(b.dataset.k);}});
+}
+
+// ---------- encoder: drag round it (clockwise = +1, a step per detent), tap = PUSH ----------
+const knob=$('knob'), STEP=18;                // EC11: 20 detents a turn
+let rot=0, drag=null;
+function ang(e){const r=knob.getBoundingClientRect(), x=e.clientX-r.left-r.width/2, y=e.clientY-r.top-r.height/2;
+  return {a:Math.atan2(y,x)*180/Math.PI, far:Math.hypot(x,y)>r.width*.18};}
+knob.addEventListener('pointerdown',e=>{e.preventDefault();knob.setPointerCapture(e.pointerId);
+  knob.classList.add('down');drag={a:ang(e).a,acc:0,moved:false,t:e.timeStamp};});
+knob.addEventListener('pointermove',e=>{if(!drag)return;const p=ang(e);if(!p.far)return;  // the middle: no angle
+  let d=p.a-drag.a;if(d>180)d-=360;if(d<-180)d+=360;drag.a=p.a;drag.acc+=d;
+  while(Math.abs(drag.acc)>=STEP){const s=Math.sign(drag.acc);drag.acc-=s*STEP;drag.moved=true;turn(s);}});
+function release(){if(drag&&!drag.moved&&Math.abs(drag.acc)<STEP/2)key('PUSH');drag=null;knob.classList.remove('down');}
+knob.addEventListener('pointerup',release);
+knob.addEventListener('pointercancel',()=>{drag=null;knob.classList.remove('down');});
+let wacc=0, wt=0;                              // wheel / trackpad: a step per ~60 px
+function wheel(e){e.preventDefault();if(e.timeStamp-wt>250)wacc=0;wt=e.timeStamp;
+  wacc+=e.deltaMode?e.deltaY*40:e.deltaY;
+  while(Math.abs(wacc)>=60){const s=Math.sign(wacc);wacc-=s*60;turn(s);}}
+for(const el of [knob,cv])el.addEventListener('wheel',wheel,{passive:false});
+
+// ---------- keyboard (the emulator's keys) ----------
+const KEYS={Escape:'BACK',Backspace:'BACK',Enter:'PUSH',' ':'PUSH',v:'VIEW',f:'FILE',',':'SOUND<','.':'SOUND>',b:'A/B',s:'SETUP'};
+document.addEventListener('keydown',e=>{if(e.metaKey||e.ctrlKey||e.altKey)return;
+  if(e.key==='ArrowUp'||e.key==='ArrowLeft'){turn(-1);e.preventDefault();}
+  else if(e.key==='ArrowDown'||e.key==='ArrowRight'){turn(1);e.preventDefault();}
+  else{const k=KEYS[e.key.length===1?e.key.toLowerCase():e.key];if(k){key(k);e.preventDefault();}}});
+connect();
+</script>
+</body>
+</html>
