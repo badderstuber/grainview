@@ -69,7 +69,8 @@ IDLE_LO, IDLE_HI = 0x0800BA9A, 0x0800BAA0
 FNAME_OFF = {0: 0x7DC, 1: 0x6C8, 2: 0x5B4}   # sound struct filename per folder
 FOLDERS = {0: "project folder", 1: "/Multigrain/Wavs", 2: "/Multigrain/Recs"}
 MAX_FILES = {0: 0x80, 1: 0x80, 2: 0x400}     # list sizes in RAM
-EMPTY_MASK = STATE + 0x40     # u32 bit n = sound n has audio  (FUN_080128a4)
+EMPTY_MASK = STATE + 0x40     # u32 bit n = sound n is a Live Sound (mg_rec.LIVE_MASK);
+                              # FUN_080128a4's "has audio" = this bit or AUDIO_LEN != 0
 AUDIO_LEN = 0x20000160 + 0x378  # + n*0x10: u32 sample length  (FUN_080128a4)
 LOST_OFF = 0x4F4              # u8 per sound; non-zero = 0x0803e91c skips the reset
 # The firmware every address here was mapped on (Multigrain.1.4.8.0.bin, not in git: it's

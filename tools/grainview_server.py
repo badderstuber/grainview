@@ -27,6 +27,12 @@ API (all JSON):
                                               first, one halt); save = Autosave.mgp now (no halt)
     POST /load    {"index"[,"folder"]}        WAV -> selected sound (one halt; another
                                               folder = the sound switches folder, as ALT+folder)
+    POST /rec     {"action"[,"sound"]}        recorder: press (start / stop / disarm; looper
+                                              freeze) | save | grab | assign (+sound) | discard
+                                              (mg_rec.rec_do: the Home page's own handlers)
+    POST /setting {"scope","key","value"[,"sound"]}   any setting (live: mg_set.write = the
+                                              record's setter, 1 halt; sound "type" = Live
+                                              Sound on/off, mg_rec.set_live, 1-2 halts)
 
 Pico USB screen (breadboard GRAINVIEW, pico/main.py; see gv_pico.py):
     POST /frame   8192 raw bytes, 128x128 4-bit, 2 px/byte (left = high nibble) -> Pico
@@ -55,6 +61,8 @@ sys.path.insert(0, HERE)
 import mg_load as L  # noqa: E402
 import mg_param as P  # noqa: E402
 import mg_preset as PR  # noqa: E402
+import mg_rec as R  # noqa: E402
+import mg_set as S  # noqa: E402
 
 # Edited scene setter FUN_080114e4(scene) (offline RE 2026-10-12, mirrors the
 # sound setter FUN_08011980): if changed { u8 0x24025b48 = scene; notify via
@@ -138,40 +146,21 @@ def setting_value(scope, key, value):
     raise ApiError(f"{key}: unsupported type")
 
 
-# ---- live settings: read-only, from the catalogue's "ram" locations (docs/SETTINGS.md) ----
+# ---- live settings, from the catalogue's "ram" locations (mg_set.py, docs/SETTINGS.md) ----
 SETTINGS_EVERY = 1.0                   # s between live settings reads (they rarely change)
-RAM_SIZE = {"bool": 1, "enum": 1, "f32": 4, "quant": 2}
 
 
 def ram_entries():
     return [(g, e) for g in ("module", "preset", "sound") for e in SETTINGS_CAT[g] if "ram" in e]
 
 
-def ram_addr(e, sound=None, key="off"):
-    r = e["ram"]
-    if "addr" in r:                     # absolute (module / preset; sound Sync is a preset byte)
-        return int(r["addr"], 16)
-    return L.SOUND_BASE + sound * L.SOUND_STRIDE + int(r[key], 16)
+def ram_addr(e, sound=None):
+    return S.addr(e, sound)
 
 
 def ram_decode(e, get, sound=None):
     """Raw RAM -> the catalogue's value; None (UI shows -) if it isn't a value we understand."""
-    t, a = e["ram"]["t"], ram_addr(e, sound)
-    if t == "bool":
-        return 1 if get(a, 1)[0] else 0
-    if t == "enum":
-        v = get(a, 1)[0]
-        return v if v < len(e["options"]) else None
-    if t == "f32":
-        v = P.f32(int.from_bytes(get(a, 4), "little"))
-        if not e["min"] - e["step"] <= v <= e["max"] + e["step"]:
-            return None
-        return round(min(max(v, e["min"]), e["max"]), e.get("dp", 3))
-    if t == "quant":
-        mask = int.from_bytes(get(a, 2), "little")
-        root = int.from_bytes(get(ram_addr(e, sound, "root"), 4), "little")
-        return {"notes": [bool(mask >> i & 1) for i in range(12)], "root": root if root < 12 else 0}
-    return None
+    return S.decode(e, get(ram_addr(e, sound), S.SIZE[e["ram"]["t"]]))
 
 
 class SpanReader:
@@ -199,9 +188,7 @@ def read_settings(t):
     want = []
     for g, e in ram_entries():
         for n in range(8) if g == "sound" else [None]:
-            want.append((ram_addr(e, n), RAM_SIZE[e["ram"]["t"]]))
-            if e["ram"]["t"] == "quant":
-                want.append((ram_addr(e, n, "root"), 4))
+            want.append((ram_addr(e, n), S.SIZE[e["ram"]["t"]]))
     rd = SpanReader(t, want)
     out = {"module": {}, "preset": {}, "sounds": [{} for _ in range(8)]}
     for g, e in ram_entries():
@@ -268,7 +255,67 @@ class MockBackend:
         self.settings = {g: {e["key"]: e["default"] for e in SETTINGS_CAT[g]} for g in ("module", "preset")}
         self.sounds[0]["settings"]["quantizer"] = {     # S1: C major, so the row has something to show
             "notes": [n in (0, 2, 4, 5, 7, 9, 11) for n in range(12)], "root": 0}
+        self.rec_st = {"state": 3, "t": time.time(), "take": 0}   # listening since t
         self.lock = threading.Lock()
+
+    # a mock recorder: the firmware's states (mg_rec.phase), times from the wall clock
+    REC_SIZE, LOOP_SIZE = 32 * R.REC_RATE, 8 * R.REC_RATE
+
+    def _rec(self):
+        r, now = self.rec_st, time.time()
+        mode = 2 if any(s["settings"].get("type") == 1 for s in self.sounds) else 0
+        size = self.LOOP_SIZE if mode == 2 else self.REC_SIZE
+        if r["state"] == 6 and (now - r["t"]) * R.REC_RATE >= size:   # 32 s: auto-stop
+            r.update(state=0, take=size)
+        fill = 0 if r["state"] == 0 and mode != 2 else min(size, int((now - r["t"]) * R.REC_RATE))
+        take = int((now - r["t"]) * R.REC_RATE) if r["state"] == 6 else r["take"]
+        return mode, r["state"], take, fill, size
+
+    def _rec_snap(self):
+        mode, state, take, fill, size = self._rec()
+        return {"mode": mode, "state": state, "phase": R.phase(mode, state, take), "take": take,
+                "fill": fill, "size": size,
+                "free": [n for n, s in enumerate(self.sounds)
+                         if s["file"] is None and s["settings"].get("type") != 1]}
+
+    def rec(self, action, sound=None):
+        with self.lock:
+            mode, state, take, fill, size = self._rec()
+            ph, r, now = R.phase(mode, state, take), self.rec_st, time.time()
+            if action == "press":
+                if ph == "pending":
+                    raise ApiError("a take is waiting: save, assign or discard it")
+                if mode == 2:                 # freeze / unfreeze
+                    r.update(state=0 if state in (1, 2, 3) else 3, take=0,
+                             t=r["t"] if state in (1, 2, 3) else now - fill / R.REC_RATE)
+                elif state == 6:
+                    r.update(state=0, take=max(take, R.TAKE_MIN))
+                elif state == 5:
+                    r.update(state=3)
+                else:
+                    r.update(state=6, t=now)
+            elif action == "grab":
+                if ph == "pending" or mode != 2 and state not in (1, 3):
+                    raise ApiError("nothing to grab now")
+                r.update(state=0, take=max(fill, R.TAKE_MIN))
+            elif action in ("save", "assign", "discard"):
+                if ph != "pending":
+                    raise ApiError("nothing to " + action)
+                if action != "discard":
+                    if action == "assign":
+                        check_args(sound=sound)
+                        s = self.sounds[sound]
+                        if s["file"] is not None or s["settings"].get("type") == 1:
+                            raise ApiError(f"S{sound + 1} isn't empty")
+                    recs = self.lists[2]
+                    name = "Rec%05d.wav" % (int(recs[-1][3:8]) + 1 if recs else 1)
+                    recs.append(name)
+                    if action == "assign":
+                        s.update(file=name, folder=2)
+                        s["cursors"][2] = len(recs) - 1
+                r.update(state=3, take=0, t=now)
+            else:
+                raise ApiError(f"unknown recorder action {action!r}")
 
     def snapshot(self):
         with self.lock:
@@ -282,6 +329,7 @@ class MockBackend:
                 "sync": self.sync, "clock_period": self.clock_period,
                 "settings": json.loads(json.dumps(self.settings)),
                 "store": json.loads(json.dumps(self.store)),
+                "rec": self._rec_snap(),
                 "sounds": [{"folder": FOLDER_NAMES[s["folder"]], "file": s["file"],
                             "cursor": s["cursors"][s["folder"]], "A": dict(s["scenes"]["A"]),
                             "B": dict(s["scenes"]["B"]),
@@ -522,6 +570,7 @@ class SwdBackend:
             "live": {k: round(P.f32(t.read_memory(P.LIVE[k])), 4) for k in NAMES},
             "store": {k: v for k, v in PR.status(t).items()
                       if k in ("project", "projects", "presets", "locked", "preset")},
+            "rec": R.rec_snapshot(t),
             "sounds": sounds,
         }
 
@@ -581,8 +630,22 @@ class SwdBackend:
             P.mark_dirty(t)
 
     def set_setting(self, scope, key, value, sound=None):
-        setting_value(scope, key, value)
-        raise ApiError(f"{key}: live writes not enabled yet (read-only), see docs/SETTINGS.md")
+        v = setting_value(scope, key, value)
+        if scope == "sound":
+            check_args(sound=sound)
+        with self.lock:                       # the record's setter (mg_set.write; Type =
+            try:                              # mg_rec.set_live, the panel's Live toggle)
+                S.write(self._target(), key, v, sound if scope == "sound" else None)
+            except (ValueError, RuntimeError) as e:
+                raise ApiError(str(e)) from None
+            self.st_t = 0.0                   # re-read the settings at the next poll
+
+    def rec(self, action, sound=None):
+        with self.lock:
+            try:
+                R.rec_do(self._target(), action, sound)
+            except (ValueError, RuntimeError) as e:
+                raise ApiError(str(e)) from None
 
     def set_mod(self, sound, scene, src, name, value):
         check_args(sound, scene, name, src)
@@ -752,6 +815,7 @@ def make_handler(be, pico=None):
                 "/setting": lambda: be.set_setting(a.get("scope"), a.get("key"), a.get("value"),
                                                    a.get("sound")),
                 "/load": lambda: be.load(int(a.get("index", -1)), folder_arg(a.get("folder"))),
+                "/rec": lambda: be.rec(a.get("action"), a.get("sound")),
             }
             fn = routes.get(self.path)
             if fn is None:

@@ -2,10 +2,11 @@
 # (tools/grainview_emulator.html, the spec): same layout maths, same fonts, so the frames
 # match pixel for pixel - check with: tools/venv/bin/python tools/gv_pico.py ui PARAM
 # Ported so far: header, status line, WAVE (waveform + animated grain dots, style B with
-# the knob readout), PARAM, MOD, SETTINGS (browse; live = read-only, as the emulator), the
-# SETUP overlay (MODULE / PRESET read-only live, GRAINVIEW's own settings editable, kept in
-# CFG on flash), the FILE overlay (the card's folders, load a WAV, the PRESETS / PROJECTS
-# slot menus), SOUND<> + A/B (the module's selected sound / edited scene), the knob-touch
+# the knob readout), PARAM, MOD, SETTINGS (every sound setting editable, + the quantizer
+# keyboard page), the SETUP overlay (MODULE / PRESET editable; GRAINVIEW's own settings
+# kept in CFG on flash), the FILE overlay (the card's folders, load a WAV, the PRESETS / PROJECTS
+# slot menus), SOUND<> + A/B (the module's selected sound / edited scene), Live Sounds
+# (SETTINGS > Type, the SOUND< + SOUND> chord, LIVE in the header), the knob-touch
 # hero, the NO MODULE LINK / flash boxes - everything the emulator has.
 #
 #   ui = UI()
@@ -18,6 +19,10 @@
 #                                       # ("root",) ("files", folder)
 #                                       # ("load", folder, index, name)
 #                                       # ("store", "preset"|"project", action, n, ...)
+#                                       # ("rec", action, n) (RECORD: mg_rec.rec_do)
+#                                       # ("live", n, 0|1) (SETTINGS > Type, or "LIVE" =
+#                                       # main.py's SOUND< + SOUND> chord)
+#                                       # ("set", key, value, sound or None) (mgset.write)
 #   ui.done(act, res, err)              # ...and what came of it (the emulator's api() reply)
 # A snapshot with "_steps" (clock values, ms) + "_rand" (random numbers) renders once per
 # step with those - the same script the emulator runs in tools/gv_render.js (tests); also
@@ -26,7 +31,9 @@
 # being edited; "_gv": {"selPlays", "touchOn"} (else the defaults); "_prev": earlier
 # snapshots fed through the knob-touch detection first (as polls); "_file": {"folder",
 # "files" (a WAV folder's names), "cur", "ok", "counts", "menu": [cur, armed]} opens FILE
-# there; "_flash": [message, label] shows that box.
+# there; "_flash": [message, label] shows that box; "_rec": [row, armed row or null] opens
+# RECORD (FILE > RECS) there; "_dived" + "_edit": the SETTINGS row being edited; "_quant":
+# [cursor, edit or None] opens SETTINGS > Quantizer.
 import json
 import framebuf
 import math
@@ -52,6 +59,19 @@ CHAIN = (".###...###.",                       # 11x5: two links + bar
          ".###...###.")
 WAVE_AMP = 0.35
 FLASH_MS = 1100
+REC_RATE = 48000
+REC_TAG = {"armed": "ARM", "pending": "TAKE", "frozen": "FRZ", "wait": "WAIT"}   # + "REC 12s"
+REC_WORD = {"idle": "STOPPED", "listen": "LISTENING", "armed": "ARMED", "rec": "RECORDING",
+            "pending": "TAKE", "loop": "LOOPING", "wait": "WAITING", "frozen": "FROZEN"}
+
+
+def rec_secs(fr):                             # frames -> "12.3s" (tenths, rounded down)
+    t = max(0, fr) * 10 // REC_RATE
+    return "%d.%ds" % (t // 10, t % 10)
+
+
+def rec_whole(fr):
+    return "%ds" % (max(0, fr) // REC_RATE)
 BIPOLAR = ("SCAN", "TONE")
 # knob touched -> hero value (the emulator's detectTouch: a stored scene value or mod depth
 # of the focused sound moving; >= BULK at once = a preset load etc., silent)
@@ -120,6 +140,13 @@ def stext(e, v):                              # a setting's value as the list sh
             return sc[0] if sc[0] == "CHROM" else NOTE[v["root"]] + " " + sc[0]
         return NOTE[v["root"]] + " %dnt" % n
     return "?"
+
+
+def q_transpose(q, d):                        # the scale moved with its root (p.33)
+    return {"root": (q["root"] + d) % 12, "notes": [q["notes"][(i - d) % 12] for i in range(12)]}
+
+
+WHITE, BLACK_L = (0, 2, 4, 5, 7, 9, 11), {1: 0, 3: 1, 6: 3, 8: 4, 10: 5}   # black -> white on its left
 
 
 def seed_of(s):
@@ -222,9 +249,11 @@ class UI:
         self.dived, self.set_cur = False, 0   # SETTINGS: cursor shown / row
         self.overlay, self.setup = None, [None, 0, 0]   # "SETUP" / [group, group cursor, row]
         self.edit = None                      # [group, entry, value, value before]
+        self.quant = None                     # SETTINGS > Quantizer: {cur, edit} (vQuant)
         self.folder, self.files, self.file_cur = "", [], 0   # FILE: "ROOT" / a folder, its rows
         self.files_ok, self.root_counts = False, {}   # list read / WAV counts at the root
         self.menu = None                      # slot menu: [title, items, cur, armed]
+        self.rec_cur, self.rec_armed, self.rec_phase = 0, None, None   # RECORD: row / 2nd push
         self.sel_plays = False                # SOUND<> also switches playback
         self.wifi_on, self.net = True, None   # WiFi wanted / its status (main.py sets it)
         self.on_wifi = None                   # main.py: turn WiFi on / off
@@ -249,6 +278,10 @@ class UI:
     def snd(self):
         s = self.snap
         return s["sounds"][self.sound] if s and s.get("sounds") else None
+
+    def live(self):                           # the focused sound is a Live Sound?
+        s = self.snd()
+        return bool(s) and bool(s.get("settings")) and s["settings"].get("type") == 1
 
     def uctx(self):
         s = self.snd()
@@ -283,8 +316,15 @@ class UI:
         bw = M.width(self.scene) + 5
         d.rect(W - bw, 0, bw, lh + 1, 15)
         d.text(M, self.scene, W - bw + 3, base, 0)
-        name = s["file"] if s and s["file"] else "- empty -"
-        d.text(M, fit(M, name, W - bw - 3 - x), x, base, 11 if s and s["file"] else 5)
+        xr, tag = W - bw - 3, self.rec_tag()
+        if tag:                               # the recorder, when it's doing something
+            tw, hot = self.T.width(tag) + 4, tag == "ARM" or tag.startswith("REC")
+            xr -= tw + 2
+            d.rect(xr + 2, 1, tw, lh - 1, 15 if hot else 7)
+            d.text(self.T, tag, xr + 4, base - 1, 0)
+        live = self.live()
+        name = "LIVE" if live else s["file"] if s and s["file"] else "- empty -"
+        d.text(M, fit(M, name, xr - x), x, base, 15 if live else 11 if s and s["file"] else 5)
         d.hline(0, W - 1, lh + 2, 4)
         return lh + 4
 
@@ -328,8 +368,8 @@ class UI:
         p = s[self.scene] if s else None
         ro = self.touch_text() if self.touch_recent() else None   # style B: knob readout
         hot = self.wave_hot()
-        key = (self.sound, self.scene, pl, s and s["file"], p and p["START"], p and p["WRAP"],
-               ro, hot)
+        key = (self.sound, self.scene, pl, s and s["file"], self.live(), self.rec_tag(),
+               p and p["START"], p and p["WRAP"], ro, hot)   # (the header's too; hot last: wave_live)
         if key != self.bg_key:
             self.fb.fill(0)
             top = self.header()
@@ -546,6 +586,86 @@ class UI:
                           e.get("panel", "") if self.dived and e else "PUSH EDIT")
         self.s_list("sound", items, self.set_cur, top, bot, self.dived)
 
+    # ---- quantizer keyboard page (the emulator's vQuant: SETTINGS > Quantizer, p.33) ----
+    def q_now(self):                          # pending edit wins
+        S, ed = self.snd()["settings"], self.quant["edit"]
+        q = ed and ed.get("q") or S["quantizer"]
+        return q, ed["mode"] if ed and ed.get("mode") is not None else S["quant_mode"]
+
+    def q_write(self, q, mode=None):
+        S = self.snd()["settings"]            # (shown now; the poll after the write confirms)
+        if q:
+            S["quantizer"] = q
+            return ("set", "quantizer", q, self.sound)
+        if mode is not None and mode != S["quant_mode"]:
+            S["quant_mode"] = mode
+            return ("set", "quant_mode", mode, self.sound)
+        return None
+
+    def q_enc(self, n):
+        Q = self.quant
+        if not Q["edit"]:
+            Q["cur"] = max(0, min(13, Q["cur"] + n))
+        elif Q["cur"] == 12:
+            Q["edit"]["q"] = q_transpose(Q["edit"]["q"], n)
+        else:
+            Q["edit"]["mode"] = max(0, min(1, Q["edit"]["mode"] + n))
+
+    def q_push(self):
+        Q = self.quant
+        q, mode = self.q_now()
+        if Q["cur"] < 12:
+            notes = list(q["notes"])
+            notes[Q["cur"]] = not notes[Q["cur"]]
+            return self.q_write({"root": q["root"], "notes": notes})
+        if not Q["edit"]:
+            Q["edit"] = {"q": q} if Q["cur"] == 12 else {"mode": mode}
+            return None
+        ed, Q["edit"] = Q["edit"], None
+        return self.q_write(ed.get("q"), ed.get("mode"))
+
+    def v_quant(self):
+        d, T, M, Q = self.d, self.T, self.M, self.quant
+        q, mode = self.q_now()
+        top = self.header()
+        self.status("QUANTIZER", "PUSH OK" if Q["edit"] else "PUSH NOTE" if Q["cur"] < 12
+                    else "PUSH ROOT" if Q["cur"] == 12 else "PUSH EDIT")
+        kw, kh, x0, y0, bw, bh = 18, 40, 1, top + 2, 11, 24
+
+        def key(n):
+            if n in WHITE:
+                return x0 + WHITE.index(n) * kw, y0, kw + 1, kh
+            return x0 + (BLACK_L[n] + 1) * kw - (bw >> 1), y0, bw, bh
+
+        for n in WHITE + (1, 3, 6, 8, 10):
+            x, y, w, h = key(n)
+            on, root = q["notes"][n], n == q["root"]
+            d.rect(x + 1, y + 1, w - 2, h - 2, (15 if root else 10) if on else 0 if n in WHITE else 3)
+            d.frame(x, y, w, h, 15 if Q["cur"] == n else 7)
+            if root:                          # root dot
+                d.rect(x + (w >> 1) - 1, y + h - 6, 3, 3, 0 if on else 12)
+        if Q["cur"] < 12:                     # caret under the key
+            x, _, w, _ = key(Q["cur"])
+            cx = x + (w >> 1)
+            for i in range(3):
+                d.rect(cx - i, y0 + kh + 2 + i, 2 * i + 1, 1, 15)
+        y = y0 + kh + 7                       # scale name
+        n, sc = sum(1 for x in q["notes"] if x), scale_of(q)
+        name = ("OFF - NO NOTES" if not n else ("" if sc[0] == "CHROM" else NOTE[q["root"]] + " ")
+                + sc[1] if sc else "%d%s" % (n, " NOTES" if n > 1 else " NOTE"))
+        d.text(T, name, (W - T.width(name)) >> 1, y + T.asc, 12 if n else 6)
+        y += T.lh + 3
+        for c, (lab, val, i) in enumerate((("ROOT", NOTE[q["root"]], 12),
+                                           ("QUANT ON", ("ALL", "MOD ONLY")[mode], 13))):
+            x, on = 1 + c * 64, Q["cur"] == i
+            ed = on and Q["edit"]
+            if on and not ed:
+                d.rect(x - 1, y, 63, T.lh + M.lh + 2, 15)
+            d.text(T, lab, x, y + T.asc, 0 if on and not ed else 8)
+            if ed:
+                d.rect(x - 1, y + T.lh + 1, M.width(val) + 2, M.lh + 1, 15)
+            d.text(M, val, x, y + T.lh + 1 + M.asc, 0 if on else 15)
+
     def v_setup(self):
         """SETUP overlay: the groups, then a group's list."""
         d, T, M = self.d, self.T, self.M
@@ -570,14 +690,14 @@ class UI:
                           e and e.get("panel") or "PUSH EDIT")
         self.s_list(grp, items, cur, top, bot, True)
 
-    def edit_start(self, g, e):               # live module: only GRAINVIEW's own are editable
+    def edit_start(self, g, e):
         v = self.sget(g, e)
         if e["type"] == "info":
             self.flash("read-only")
         elif v is None:
             self.flash("not mapped yet")
-        elif g != "gv" and self.snap and self.snap.get("mode") != "mock":
-            self.flash("read-only (live)")
+        elif e["type"] == "quant":            # its own keyboard page
+            self.quant = {"cur": v["root"], "edit": None}
         elif e["type"] in ("enum", "num"):
             self.edit = [g, e, v, v]
 
@@ -595,6 +715,11 @@ class UI:
         if v != v0 and g == "gv" and "set" in e:
             e["set"](v)
             self.save_cfg()
+        elif v != v0 and g == "sound" and e["key"] == "type":
+            return ("live", self.sound, v)
+        elif v != v0:                         # the module's setter (main.py: mgset.write)
+            return ("set", e["key"], v, self.sound if g == "sound" else None)
+        return None
 
     def load_cfg(self):
         try:
@@ -625,8 +750,8 @@ class UI:
     def is_store(self, f=None):
         return (self.folder if f is None else f) in ("PRESETS", "PROJECTS")
 
-    def file_lo(self):                        # rows run from -1 ('..' = up to the root)
-        return 0 if self.folder == "ROOT" else -1
+    def file_lo(self):                        # rows run from -1 ('..' = up to the root);
+        return 0 if self.folder == "ROOT" else -2 if self.folder == "Recs" else -1   # Recs: -1 RECORD
 
     def root_row(self, y, rh, f, on):
         """NAME ...... [CUR] count  (CUR = the selected sound's WAV folder)."""
@@ -676,8 +801,12 @@ class UI:
             if i < 0:
                 if on:
                     d.rect(0, y, W, rh, 15)
-                d.text(M, "..", 2, y + M.asc, 0 if on else 9)
-                if not F:
+                if i == lo:
+                    d.text(M, "..", 2, y + M.asc, 0 if on else 9)
+                else:                         # Recs: the recorder
+                    d.text(M, "RECORD", 2, y + M.asc, 0 if on else 15)
+                    d.text_r(self.T, self.rec_tag() or "", W - 2, y + M.asc, 0 if on else 8)
+                if i == -1 and not F:
                     sd = self.snap and self.snap.get("sd_state")
                     d.text(M, "SD error" if sd == 3 else "empty folder" if self.files_ok
                            else "loading list...", 2, y + rh + M.asc + 2, 8)
@@ -708,6 +837,98 @@ class UI:
             if on:
                 d.rect(x + 2, yy, w - 4, rh, 15)
             d.text(M, it[0], x + 5, yy + 1 + M.asc, 0 if on else 12)
+
+    # ---- the recorder (snap["rec"]: phase / take / fill / size in frames @48k, free sounds) ----
+    def rec(self):
+        s = self.snap
+        return s.get("rec") if s and s.get("connected") else None
+
+    def rec_tag(self):
+        r = self.rec()
+        if not r:
+            return None
+        p = r["phase"]
+        return "REC " + rec_whole(r["take"]) if p == "rec" else REC_TAG.get(p)
+
+    def rec_items(self):
+        """(label, action, sound, needs a 2nd push) - what makes sense now."""
+        r = self.rec()
+        if not r:
+            return []
+        p, it = r["phase"], []
+        if p == "pending":
+            it.append(("SAVE TO RECS", "save", None, False))
+            for n in r["free"]:
+                it.append(("SAVE TO S%d" % (n + 1), "assign", n, False))
+            it.append(("DISCARD", "discard", None, True))
+        elif r["mode"] == 2:
+            it.append(("UNFREEZE" if p == "frozen" else "FREEZE", "press", None, False))
+            it.append(("KEEP LOOP", "grab", None, False))
+        elif p == "armed":
+            it.append(("CANCEL", "press", None, False))
+        elif p == "rec":
+            it.append(("STOP", "press", None, False))
+        else:
+            it.append(("START", "press", None, False))
+            if r["state"] in (1, 3) and r["fill"] >= 4800:
+                it.append(("GRAB LAST " + rec_whole(r["fill"]), "grab", None, False))
+        return it
+
+    def rec_sync(self):                       # a new state: cursor back to the top
+        r = self.rec()
+        p = r["phase"] if r else None
+        if p != self.rec_phase:
+            self.rec_phase, self.rec_cur, self.rec_armed = p, 0, None
+        self.rec_cur = max(0, min(self.rec_cur, len(self.rec_items()) - 1))
+
+    def v_rec(self):
+        d, T, M, L = self.d, self.T, self.M, FONT("L")
+        top = self.header()
+        r = self.rec()
+        self.rec_sync()
+        bot = self.status("RECORD", "PUSH OK" if self.rec_armed is None else "PUSH AGAIN")
+        if not r:
+            return
+        p = r["phase"]
+        fr = r["take"] if p in ("rec", "pending") else 0 if p == "armed" else r["fill"]
+        y = top + 1
+        d.text(M, REC_WORD.get(p, p), 2, y + M.asc, 15 if p in ("rec", "armed") else 12)
+        d.text_r(T, "LOOPER" if r["mode"] == 2 else "RESAMPLE" if r["mode"] == 1 else "INPUT",
+                 W - 2, y + M.asc, 8)
+        y += M.lh + 1
+        d.text(L, rec_secs(fr), 2, y + L.asc, 15)
+        d.text_r(T, "/ " + rec_whole(r["size"]), W - 2, y + L.asc, 8)
+        y += L.lh + 2
+        d.rect(2, y, W - 4, 3, 3)
+        if r["size"] > 0:
+            d.rect(2, y, (W - 4) * min(fr, r["size"]) // r["size"], 3, 15 if p == "rec" else 10)
+        y += 6
+        it, rh = self.rec_items(), M.lh + 2
+        rows = max(1, (bot - y) // rh)
+        first = max(0, min(self.rec_cur - (rows >> 1), len(it) - rows))
+        for k in range(rows):
+            i = first + k
+            if i >= len(it):
+                break
+            yy, on = y + k * rh, i == self.rec_cur
+            if on:
+                d.rect(0, yy, W, rh, 15)
+            d.text(M, it[i][0], 2, yy + 1 + M.asc, 0 if on else 12)
+
+    def open_rec(self):
+        self.overlay, self.menu, self.rec_phase = "REC", None, None
+        self.rec_sync()
+
+    def rec_push(self):
+        it = self.rec_items()
+        if self.rec_cur >= len(it):
+            return None
+        _, action, n, confirm = it[self.rec_cur]
+        if confirm and self.rec_armed != self.rec_cur:
+            self.rec_armed = self.rec_cur
+            return None
+        self.rec_armed = None
+        return ("rec", action, n)
 
     def open_root(self, frm):
         """The card's root, cursor on the folder we came up from (WAV counts: main.py)."""
@@ -787,10 +1008,40 @@ class UI:
         elif k == "load":
             self.overlay = None
             self.flash(act[3], "LOADING")
+        elif k == "rec":
+            if act[1] == "save":
+                self.flash("TO RECS", "SAVING")
+            elif act[1] == "assign":
+                self.flash("TO S%d" % (act[2] + 1), "SAVING")
+            elif act[1] == "discard":
+                self.flash("DISCARDED", "TAKE")
+        elif k == "live":
+            s = self.snap["sounds"][act[1]] if self.snap and self.snap.get("sounds") else None
+            if s and s.get("settings"):       # show it now; the next poll confirms
+                s["settings"]["type"] = act[2]
+            self.flash("LIVE" if act[2] else "SAMPLE", "S%d" % (act[1] + 1))
+        elif k == "set":                      # show it now; the poll after the write confirms
+            if act[3] is not None:
+                s = self.snap["sounds"][act[3]] if self.snap and self.snap.get("sounds") else None
+                src = s and s.get("settings")
+            else:
+                st = self.snap and self.snap.get("settings")
+                src = st and next((st[g] for g in ("module", "preset") if act[1] in st[g]), None)
+            if src is not None:
+                src[act[1]] = act[2]
         elif k == "store":
             if act[6]:
                 self.overlay = None
             self.flash(act[4], act[5])
+
+    def live_toggle(self):
+        e = [e for e in CAT["sound"] if e["key"] == "type"][0]   # SAMPLE / LIVE
+        v = self.sget("sound", e)
+        if v is None:
+            self.flash("not mapped yet")
+            return None
+        self.edit = None
+        return ("live", self.sound, 1 - v)
 
     # ---- knob touch ----
     def detect_touch(self):
@@ -898,6 +1149,8 @@ class UI:
             self.fb.fill(0)
             if self.overlay == "FILE":
                 self.v_file()
+            elif self.overlay == "REC":
+                self.v_rec()
             elif self.overlay == "SETUP":
                 self.v_setup()
             elif self.touch_active():
@@ -906,6 +1159,8 @@ class UI:
                 self.v_param()
             elif self.view == "MOD":
                 self.v_mod()
+            elif self.quant and self.snd():
+                self.v_quant()
             else:
                 self.v_set()
         self.overlays()
@@ -954,7 +1209,8 @@ class UI:
         kept = (self.touch, self.tb, self.dived, self.set_cur, self.overlay, self.setup, self.edit,
                 self.sel_plays, self.touch_on, self.folder, self.files, self.file_cur,
                 self.files_ok, self.root_counts, self.menu, self.flash_msg, self.flash_label,
-                self.flash_until, self.wifi_on, self.net)
+                self.flash_until, self.wifi_on, self.net, self.rec_cur, self.rec_armed,
+                self.rec_phase, self.quant)
         gv = snap.get("_gv") or {}            # GRAINVIEW's own settings: the defaults unless given
         self.sel_plays, self.touch_on = bool(gv.get("selPlays")), gv.get("touchOn", 1) != 0
         self.wifi_on, self.net = gv.get("wifi", 1) != 0, gv.get("net")
@@ -964,6 +1220,10 @@ class UI:
         if su and su[0] is not None and "_edit" in snap:
             grp = SETUP_GROUPS[su[0]][1]
             self.edit = [grp, self.items(grp)[su[2]], snap["_edit"], None]
+        elif snap.get("_dived") and "_edit" in snap:   # SETTINGS: the cursor row being edited
+            self.edit = ["sound", CAT["sound"][snap.get("_setCur", 0)], snap["_edit"], None]
+        qq = snap.get("_quant")               # SETTINGS > Quantizer: [cursor, edit or None]
+        self.quant = {"cur": qq[0], "edit": qq[1]} if qq else None
         live = {k: v for k, v in snap.items() if k != "_steps"}
         fl, self.menu, self.flash_msg = snap.get("_file"), None, None
         if fl:
@@ -975,6 +1235,10 @@ class UI:
             if fl.get("menu"):
                 self.open_menu()
                 self.menu[2], self.menu[3] = fl["menu"]
+        if snap.get("_rec"):                  # RECORD open: [row, armed row or None]
+            self.overlay, self.snap = "REC", live
+            self.rec_phase = live.get("rec") and live["rec"]["phase"]
+            self.rec_cur, self.rec_armed = snap["_rec"]
         if snap.get("_flash"):
             self.flash(*snap["_flash"])
         self.rand = lambda: r.pop(0)
@@ -997,7 +1261,8 @@ class UI:
             (self.touch, self.tb, self.dived, self.set_cur, self.overlay, self.setup, self.edit,
              self.sel_plays, self.touch_on, self.folder, self.files, self.file_cur,
              self.files_ok, self.root_counts, self.menu, self.flash_msg, self.flash_label,
-             self.flash_until, self.wifi_on, self.net) = kept
+             self.flash_until, self.wifi_on, self.net, self.rec_cur, self.rec_armed,
+             self.rec_phase, self.quant) = kept
             self.g_list, self.g_acc, self.g_t, self.g_key, self.g_ph = [], 0, None, None, 0
             self.bg_key = None
 
@@ -1018,7 +1283,9 @@ class UI:
 
     def enc(self, n):
         su = self.setup
-        if self.edit:
+        if self.quant and not self.overlay and self.view == "SETTINGS" and self.snd():
+            self.q_enc(n)
+        elif self.edit:
             self.edit_step(n)
         elif self.overlay == "SETUP" and su[0] is None:
             su[1] = max(0, min(len(SETUP_GROUPS) - 1, su[1] + n))
@@ -1027,6 +1294,9 @@ class UI:
         elif self.overlay == "FILE" and self.menu:
             m = self.menu
             m[2], m[3] = max(0, min(len(m[1]) - 1, m[2] + n)), None
+        elif self.overlay == "REC":
+            self.rec_cur = max(0, min(len(self.rec_items()) - 1, self.rec_cur + n))
+            self.rec_armed = None
         elif self.overlay == "FILE":
             lo = self.file_lo()
             self.file_cur = max(lo, min(max(lo, len(self.files) - 1), self.file_cur + n))
@@ -1038,8 +1308,10 @@ class UI:
 
     def push(self):
         su = self.setup
-        if self.edit:
-            self.edit_commit()
+        if self.quant and not self.overlay and self.view == "SETTINGS" and self.snd():
+            return self.q_push()
+        elif self.edit:
+            return self.edit_commit()
         elif self.overlay == "SETUP" and su[0] is None:
             if SETUP_GROUPS[su[1]][1]:
                 su[0], su[2] = su[1], 0
@@ -1050,8 +1322,12 @@ class UI:
             self.edit_start(g, self.items(g)[su[2]])
         elif self.overlay == "FILE" and self.menu:
             return self.menu_push()
-        elif self.overlay == "FILE" and self.file_cur < 0:
+        elif self.overlay == "REC":
+            return self.rec_push()
+        elif self.overlay == "FILE" and self.file_cur == self.file_lo() and self.folder != "ROOT":
             return self.open_root(self.folder)
+        elif self.overlay == "FILE" and self.file_cur < 0:
+            self.open_rec()
         elif self.overlay == "FILE" and self.folder == "ROOT":
             return self.open_files(self.files[self.file_cur])
         elif self.overlay == "FILE" and self.is_store():
@@ -1073,11 +1349,24 @@ class UI:
             return self.push()
         if name not in ("BACK", "A/B"):       # leaving = cancel an edit
             self.edit = None
+            if self.quant:
+                self.quant["edit"] = None
+        if name in ("VIEW", "FILE", "SETUP"):  # ...and the keyboard page
+            self.quant = None
+        if name == "LIVE":                    # SOUND< + SOUND> together: toggle Live
+            return self.live_toggle()
         if name == "BACK":
             if self.edit:
                 self.edit = None
             elif self.menu:
                 self.menu = None
+            elif self.quant and not self.overlay:
+                if self.quant["edit"]:
+                    self.quant["edit"] = None
+                else:
+                    self.quant = None
+            elif self.overlay == "REC":       # (its list again: new takes)
+                return self.open_files("Recs")
             elif self.overlay == "FILE" and self.folder != "ROOT":
                 return self.open_root(self.folder)
             elif self.overlay == "SETUP" and self.setup[0] is not None:

@@ -100,6 +100,11 @@ def fit(f, s, max_w):
     """s shortened to fit max_w px, ending in an ellipsis."""
     if f.width(s) <= max_w:
         return s
-    while s and f.width(s + ELL) > max_w:
-        s = s[:-1]
+    # = the emulator's "drop the last char until s + ELL fits", in one pass (that re-measured
+    # the whole name per char: ~1000 glyph lookups a row for a 45-char file name, every redraw)
+    room, w = max_w - f.ellw(), 0
+    for i, ch in enumerate(s):
+        w += f.ellw() if ch == ELL else f.glyph(ord(ch))[0]
+        if w > room:
+            return s[:i] + ELL
     return s + ELL

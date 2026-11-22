@@ -244,6 +244,24 @@ def mg_do(act):
     if k == "scene":
         mg_scene(act[1])
         return None
+    if k == "rec":
+        import mgrec
+        mgrec.rec_do(s, act[1], act[2])
+        mg_poll()
+        return None
+    if k == "live":
+        import mgrec
+        mgrec.set_live(s, act[1], act[2])
+        mg["poll"].st_for = None              # its settings (Type) re-read at once (keeping
+                                              # the cache: st = None would lose module / preset)
+        mg_poll()
+        return None
+    if k == "set":                            # ("set", key, value, sound or None)
+        import mgset
+        mgset.write(s, act[1], act[2], act[3])
+        mg["poll"].st_for = None              # (as Live: re-read the settings at once)
+        mg_poll()
+        return None
     import mgfile as F
     if k == "root":
         return F.counts(s)
@@ -514,8 +532,15 @@ def swd_packet():
     seq, op, n = hd[0], hd[1], hd[2] | hd[3] << 8
     if n > 4096:
         gc.collect()                          # big test snapshots: room in one piece
-    body = inb.read(n) if n else b""          # bytes: json.loads takes it as it is
     try:
+        body = inb.read(n) if n else b""      # bytes: json.loads takes it as it is
+    except MemoryError:                       # no room: drop it (drained), say so, keep going
+        body = None
+        while n:
+            n -= len(inb.read(min(n, 512)))
+    try:
+        if body is None:
+            raise MemoryError("packet too big for the heap")
         out, st = swd_op(op, body), 0         # bytes, or a list of pieces
     except Exception as e:                    # SWDError, bad args: report, keep running
         out, st = str(e).encode(), 1
@@ -559,6 +584,37 @@ def packet():
 
 state = [p() for _, p in buttons]
 changed = [0] * len(buttons)
+
+# SOUND< + SOUND> held together = "LIVE" (toggle the sound's Live mode). So a lone SOUND
+# key acts when it's let go (unless it was part of the chord), and the Mac hears the
+# resolved key (@B SOUND< / @B LIVE), not the raw presses.
+SND = ("SOUND<", "SOUND>")
+snd = [False, None]                           # chord on; the lone key down (acts on release)
+
+def snd_key(name, down):
+    # the other key as debounced (not its raw pin: let go of both at once and the raw pin
+    # is up before its own release is handled - the chord would end early and that
+    # release then count as a lone press, moving the sound)
+    held = state[KEYS.index(SND[name == SND[0]])] == 0
+    if down:
+        if snd[0]:
+            return
+        if not held:                          # alone so far: wait for its release
+            snd[1] = name
+            return
+        snd[0], snd[1] = True, None           # the other one is held: the chord
+        name = "LIVE"
+    elif snd[0]:
+        if not held:                          # both up: the chord's over
+            snd[0] = False
+        return
+    elif snd[1] != name:                      # no lone press of this key to finish
+        return
+    else:
+        snd[1] = None
+    print("@B %s 1" % name)
+    print("@B %s 0" % name)
+    ui_key(name)
 try:
     with open("gv_cfg.json") as f:            # gv_ui's settings: WiFi unless it's OFF
         wifi = json.load(f).get("wifi", 1) != 0
@@ -588,6 +644,9 @@ try:
             if v != state[i] and time.ticks_diff(now, changed[i]) > 20:
                 state[i] = v
                 changed[i] = now
+                if name in SND:               # chord-aware: see snd_key()
+                    snd_key(name, not v)
+                    continue
                 print("@B %s %d" % (name, 1 - v))
                 if not v:
                     ui_key(name)

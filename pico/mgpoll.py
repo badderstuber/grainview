@@ -19,7 +19,7 @@ import mg_map as M
 
 GAP = 48                                      # merge reads closer than this
 NAME_PEEK = 32                                # file name bytes read first (256 if no NUL)
-RAM_SIZE = {"bool": 1, "enum": 1, "f32": 4, "quant": 2}
+RAM_SIZE = {"bool": 1, "enum": 1, "u8": 1, "f32": 4, "quant": 2}
 NBLK = M.BLOCK_HI - M.BLOCK_LO
 START_OFF = M.PARAMS[0][1]                    # mod values are laid out like the params
 
@@ -86,8 +86,8 @@ def name(b):
 
 # ---- settings (grainview_server.read_settings / ram_decode) ----
 
-def s_addr(row, n, i=4):
-    return row[3] if row[3] is not None else base(n) + row[i]
+def s_addr(row, n):
+    return row[3] if row[3] is not None else base(n) + row[4]
 
 
 def s_wants(sounds):
@@ -95,36 +95,60 @@ def s_wants(sounds):
     for row in M.SETTINGS:
         for n in sounds if row[0] == "sound" else (None,):
             w.append((s_addr(row, n), RAM_SIZE[row[2]]))
-            if row[2] == "quant":
-                w.append((s_addr(row, n, 5), 4))
     return w
 
 
-def s_decode(row, sp, n):
-    t, nopt, lo, hi, step, dp = row[2], row[6], row[7], row[8], row[9], row[10]
+def s_decode(row, sp, n):                     # mg_set.decode
+    t, nopt, lo, hi, step, dp = row[2], row[7], row[8], row[9], row[10], row[11]
     a = s_addr(row, n)
     if t == "bool":
         return 1 if sp.u8(a) else 0
     if t == "enum":
         v = sp.u8(a)
         return v if v < nopt else None
+    if t == "u8":
+        v = sp.u8(a)
+        return v if lo <= v <= hi else None
     if t == "f32":
         v = sp.f32(a)
+        if row[13] is not None:
+            v = row[13] / v if v > 0 else lo - 2 * step
+        v *= row[12]
         if not lo - step <= v <= hi + step:  # also NaN
             return None
         return round(min(max(v, lo), hi), dp)
     if t == "quant":
-        mask = struct.unpack("<H", sp.get(a, 2))[0]
-        root = sp.u32(s_addr(row, n, 5))
-        return {"notes": [bool(mask >> i & 1) for i in range(12)], "root": root if root < 12 else 0}
+        m = struct.unpack("<H", sp.get(a, 2))[0]
+        root = m >> 12
+        return {"notes": [bool(m >> i & 1) for i in range(12)], "root": root if root < 12 else 0}
     return None
 
 
 GLOBALS = ((M.CUR_SOUND, 1), (M.PLAYING, 4), (M.EDIT_SCENE, 1), (M.MORPH, 4),
            (M.SD_STATE, 4), (M.SIZE_MODE, 1), (M.SYNC, 1), (M.CLOCK_PERIOD, 4),
            (M.CUR_PROJECT, 1), (M.CUR_PRESET, 1), (M.PROJECT_EXISTS, 8),
-           (M.PRESET_EXISTS, 8), (M.PRESET_LOCKED, 8)) + tuple((a, 4) for _, a in M.LIVE)
+           (M.PRESET_EXISTS, 8), (M.PRESET_LOCKED, 8),
+           (M.REC_MODE, M.SLOTS_END - M.REC_MODE), (M.LIVE_MASK, 4)) + tuple((a, 4) for _, a in M.LIVE)
 ALL = tuple(range(8))
+
+
+def phase(mode, state, take):                 # mg_rec.phase
+    if state == 0 and take >= M.TAKE_MIN:
+        return "pending"
+    if mode == 2:
+        return "frozen" if state in (0, 4) else "wait" if state == 1 else "loop"
+    return "idle" if state == 0 else "armed" if state == 5 else "rec" if state in (6, 7) \
+        else "listen"
+
+
+def rec(sp):
+    """The recorder for the snapshot (mg_rec.rec_snapshot)."""
+    mode, state, take, mask = sp.u8(M.REC_MODE), sp.i32(M.REC_STATE), sp.i32(M.REC_TAKE), \
+        sp.u32(M.LIVE_MASK)
+    return {"mode": mode, "state": state, "phase": phase(mode, state, take), "take": take,
+            "fill": sp.i32(M.REC_FILL), "size": sp.i32(M.REC_SIZE),
+            "free": [n for n in range(8)
+                     if not (mask >> n & 1 or sp.i32(M.AUDIO_LEN + n * 0x10))]}
 
 
 class Poller:
@@ -225,6 +249,7 @@ class Poller:
             "store": {"project": sp.u8(M.CUR_PROJECT), "projects": sp.bitmap(M.PROJECT_EXISTS),
                       "presets": sp.bitmap(M.PRESET_EXISTS), "locked": sp.bitmap(M.PRESET_LOCKED),
                       "preset": cp if cp < M.SLOTS else None},
+            "rec": rec(sp),
             "sounds": out,
             "pico_ms": time.ticks_diff(time.ticks_ms(), t0),
         }

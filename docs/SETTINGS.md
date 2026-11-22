@@ -81,16 +81,52 @@ modulation assignments (p.27 "toggle is applied per Preset"), Thru blur bypass /
 
 ## Live status
 
-**Reads (built 2026-10-13, untested on hardware):** every catalogued setting with a `ram`
-entry in `tools/gv_settings.json` is read from the live module, once a second (settings rarely
-change; 20 small block reads). Values are decoded strictly — an out-of-range enum or an
-implausible float shows `-` instead of a wrong value. Not read yet: **Gate delay** and
-**SELECT range** (storage format unknown). Tested against a fake target
-(`read_settings` in `grainview_server.py`).
+**Every setting is read and written on a live module (2026-10-29).** Reads: every `ram`
+entry in `tools/gv_settings.json`, once a second, decoded strictly (`mg_set.decode`; the Pico:
+`mgpoll.s_decode`) — an out-of-range value shows `-`. Writes: `tools/mg_set.py` (CLI + the
+server's `POST /setting`) and `pico/mgset.py` (the Pico UI: SETTINGS, SETUP > MODULE / PRESET,
+the quantizer page). Type (Live Sound) keeps its own write (`mg_rec.set_live`, docs/RECORDER.md).
 
-**Writes:** still refused on a live module (UI: "read-only (live)"). After the hardware
-checklist below: preset + sound settings = RAM write + the autosave flag; module settings =
-call the record's setter over SWD.
+### The records (mapped 2026-10-29 from the live module + the .bin)
+
+Every setting is a reactive record: `vptr` · `std::function` change callback (storage +4..+0xb,
+manager +0xc, invoker +0x10) · the value. The record classes (vtables `0x0805C5CC`..`0x0805C734`,
+12-byte stride, one per setting) differ only in where the value sits:
+
+| value type | value at | then | settings |
+|---|---|---|---|
+| u8 | rec+0x15 | default +0x14, min +0x16, max +0x17 | every on/off + choice setting, Gate delay |
+| u8 | rec+0x14 | | (scene, current sound: not settings) |
+| u16 | rec+0x14 | | Quantizer: notes bits 0–11, **root bits 12–15** (the page code splits it: `ubfx #0,#12` / `lsrs #12`) |
+| f32 | rec+0x18 | default +0x14, min +0x1c, max +0x20 | Pitch out 1.0–1.1, SELECT range 1.0–8.571, Fine tune −1..1 (= ±7 st), Input trim, thresholds, looper size |
+
+Mod out A/B is a plain 2-byte array (no vptr): std::function at `0x24025B4C`, values
+`0x24025B5C/5D`, indexed setter inlined (the invoker gets `&index, &value`).
+
+The setter is the same template in every class: `if (value != new) { value = new; if
+(manager) invoker(&functor, &new); }`. The callbacks (all read from the live module, checked
+in the .bin):
+
+| callback | does | settings |
+|---|---|---|
+| `st+0x10 = st+0x08` | Settings.mgs changed → saved | every MODULE setting |
+| + `FUN_0802bab0(v)` | knob mode → 2 panel globals | Knob mode |
+| + `[0x24020b34] = [0x24020b3c] = v + 3` | the gate delay, in ms + 3 | Gate delay |
+| + `FUN_0800a020(v)` | swaps the LED palette | Theme |
+| `st+0x11 = st+0x08` | project changed → autosave (Thru: not while `st+0 == 1`) | every PRESET + SOUND setting |
+| none | the panel only stores the value (ALT page, `0x08030b7a`) | Choke, Gate |
+
+**Write recipe** (`mg_set.write`): the float setter takes its value in `s0`, which our call
+helper doesn't set, so every type does the setter's two steps itself: check the record
+(invoker = the catalogue's `inv`, or for Choke / Gate no callback + a known vtable), clamp a
+float to the record's own min / max, store the value, then call the invoker with
+`(&functor, &value)` — one short idle-loop halt, no SD. No callback → mark the project
+changed (`st+0x11`), so Choke / Gate survive in the autosave (the panel doesn't, until
+something else changes).
+
+Units: Fine tune raw −1..1 × 7 = semitones (p.29: ±7 st). SELECT range raw = a multiplier
+1.0 (5 V, the default) .. 8.571; shown as 5 V / raw (0.58–5.00 V; the manual's lowest is
+"0.667 V"). Gate delay = whole ms 0–10 (the record's max is 10).
 
 ## Settings.mgs map (offline Ghidra, 2026-10-13 — hardware check pending)
 
@@ -102,7 +138,8 @@ RAM **`0x24025C60`** (anchored by two known addresses: +0x14 = the project u8 `0
 the order below; fields added in later firmware are gated by version.
 
 **Reactive records** (same model as presets): each setting is a record with a `std::function`
-setter at record+0x8/+0xc; the value byte sits at record+0x11 (u8) / the float at record+0x14,
+setter at record+0x8/+0xc (**corrected 2026-10-29:** the u8 value sits at record+0x15, the float at
+record+0x18 - see "The records" above),
 the default/pending copy one slot below. Most setters only mark settings dirty (save pending);
 a few also apply side effects (Theme palette, recorder thresholds / looper size). **Live writes
 must go through the setter** (an SWD function call, like our other firmware calls), not a raw
@@ -128,7 +165,7 @@ RAM poke, or the side effect and the autosave won't happen.
 | 0x1b9 | 0x24025E19 | u8 | Knob mode (JUMP/CATCH) | medium | setter pushes to panel globals; by elimination |
 | 0x1d1 | 0x24025E31 | u8 | Auto-collect | high | read in the preset-save routine |
 | 0x1d4 / 0xbc4 | — | Sound | Default Sound / default Live Sound | high | two full Sound records |
-| 0x15c9 | 0x24027229 | u8 | bounded int (min +0x15ca, max +0x15cb) — Gate delay ms? | low | v1.4-gated |
+| 0x15c9 | 0x24027229 | u8 | **Gate delay** 0–10 ms (min +0x15ca, max +0x15cb) | ✅ | callback stores v + 3 as the gate delay (2026-10-29) |
 | 0x15e1 | 0x24027241 | u8 | Grain size scaling | high | fed to the engine with Grain max |
 | 0x15f8 / 0x1610 / 0x1628 | 0x24027258 / 70 / 88 | u8 | **?** three v1.4 flags, default off | — | reset to 0 by defaults |
 | 0x1644 | 0x240272A4 | f32 | SELECT range | high | multiplies CV input 3 (SELECT) |
@@ -182,13 +219,13 @@ Sound serialiser `FUN_080207e8` / deserialiser `FUN_08022d38`. Sound n = `0x2402
 | 0x525 | u8 | Size-Pitch link | ✅ | known |
 | 0x53d | u8 | Rate-Size link | ✅ | known |
 | 0x554 | u16 | Quantizer notes (12-bit mask) | high | 16-bit, engine reads it as the scale |
-| 0x56c, 0x584 | 32-bit | Quantizer root / enable? | medium | follow the notes |
+| 0x56c, 0x584 | f32 | **?** two float records (not the root: that's bits 12-15 of +0x554) | — | all 0 seen |
 | 0x59c | u8 | Sample folder | ✅ | known |
 | (string) | | Sample filename | ✅ | memcpy after the folder |
 | 0x8f1 | u8 | Quant mode (ALL / MOD) | high | manual order; engine reads it |
 | 0x90c | f32 | Fine tune (±7 st) | high | float, engine reads it |
 | 0x92d | u8 | Ping-pong | high | manual order; engine reads it |
-| 0x945 | u8 | **Live** sound | high | bool; pre-v1.4 |
+| 0x945 | u8 | **Live** sound | ✅ | bool; pre-v1.4. **Writable** via its setter (docs/RECORDER.md §1, hardware-tested 2026-10-21) |
 | 0x95d | u8 | **Choke** | high | v1.4: loader forces 0 for older files |
 | 0x975 | u8 | **Gate** | high | v1.4: same |
 | 0x98c / 0x9a4 / 0x9bc, 0x9d4 / 0x9ec | u8 ×3, 32-bit ×2 | **?** (sampling / trim?) | — | later block |

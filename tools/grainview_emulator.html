@@ -73,6 +73,8 @@
       <li><span class="k">Push</span> / <kbd>Enter</kbd> — dive in / confirm</li>
       <li><span class="k">BACK</span> / <kbd>Esc</kbd> — up a level</li>
       <li><span class="k">SOUND‹ ›</span> / <kbd>,</kbd><kbd>.</kbd> — change sound (1–8)</li>
+      <li><span class="k">SOUND‹ + SOUND›</span> together / <kbd>L</kbd> — toggle the sound's Live mode</li>
+      <li><span class="k">FILE › RECS › RECORD</span> — the recorder: start / stop, save / assign / discard a take, looper freeze</li>
       <li><span class="k">A/B</span> / <kbd>B</kbd> — edited scene A / B</li>
       <li><span class="k">FILE</span> / <kbd>F</kbd> — the card, opens on the sound's folder. <code>..</code> or BACK = up to the root (PROJECT / WAVS / RECS / PRESETS / PROJECTS). FILE again = quick jump to the next folder</li>
     </ul>
@@ -154,15 +156,25 @@ function sstep(e,v,d){if(e.type==='enum')return clamp(v+d,0,e.options.length-1);
 function editStart(g,e){if(!e)return;const v=sget(g,e);
   if(e.type==='info')return flash('read-only');
   if(v==null)return flash('not mapped yet');
-  if(g!=='gv'&&M_&&M_.mode!=='mock')return flash('read-only (live)');   // live writes: after the hardware check
   if(e.type==='quant'){st.quant={cur:v.root,edit:null};return;}    // its own keyboard page
   st.edit={g,e,v,v0:v};}
 async function editCommit(){const {g,e,v,v0}=st.edit;st.edit=null;if(v===v0)return;
   if(g==='gv')return e.set(v);
+  if(g==='sound'&&e.key==='type')return setLive(st.sound,v);
   const sound=st.sound,src=g==='sound'?snd().settings:M_.settings[g];
   src[e.key]=v;if(e.key==='link_rs'||e.key==='link_sp')snd()[e.key]=v;  // show at once, poll confirms
   if(e.key==='sync')M_.sync=v;
   try{await api('/setting',{scope:g,key:e.key,value:v,sound});}catch(x){flash(x.message);}}
+function isLive(s=snd()){return !!(s&&s.settings&&s.settings.type===1);}
+// a sound's Live mode (SETTINGS > Type, or SOUND‹ + SOUND› together = btn('LIVE'))
+function liveToggle(){const v=sget('sound',gItems('sound').find(e=>e.key==='type'));
+  if(v==null)return flash('not mapped yet');
+  st.edit=null;setLive(st.sound,1-v);}
+async function setLive(n,v){const s=M_&&M_.sounds&&M_.sounds[n];
+  try{await api('/setting',{scope:'sound',key:'type',value:v,sound:n});
+    if(s&&s.settings)s.settings.type=v;            // show it now, the poll confirms
+    flash(v?'LIVE':'SAMPLE','S'+(n+1));}
+  catch(x){flash(x.message);}}
 // normalized until unit conversions are mapped: unipolar .42, bipolar +.42
 function fmt(v,bip){if(v==null)return '-';const a=Math.abs(v),
   s=a>=0.995?'1.0':'.'+String(Math.round(a*100)).padStart(2,'0');
@@ -204,6 +216,7 @@ async function poll(){
 // ---------- UI state ----------
 const st={view:'WAVE', overlay:null, dived:false, sound:0, scene:'A', selPlays:false, wifiOn:true, net:null,
   files:[], folder:'', rootCounts:{}, filesOk:false, filesReq:0, fileCur:0, menu:null, setCur:0, edit:null, quant:null,
+  recCur:0, recArmed:null, recPhase:null,
   setup:{g:null,gc:0,cur:0}, flash:null, flashT:0, busy:0, localT:0,
   fontSet:FONT_SETS[localStorage.gvFontSet]?localStorage.gvFontSet:'Spleen',
   touchOn:localStorage.gvTouch!=='0', touch:null,
@@ -294,8 +307,11 @@ function header(b){const {M}=fs(),s=snd(),lh=fm.lh(M),base=fm.asc(M)+1;
   if(M_&&M_.playing===st.sound){playMark(b,x,base-fm.cap(M)+1,fm.cap(M)-1);} x+=7;
   const bw=textW(M,st.scene)+5;
   rect(b,W-bw,0,bw,lh+1,15);text(b,M,st.scene,W-bw+3,base,0);
-  const name=s&&s.file?s.file:'- empty -';
-  text(b,M,fit(M,name,W-bw-3-x),x,base,s&&s.file?11:5);
+  let xr=W-bw-3;const tag=recTag();
+  if(tag){const {T}=fs(),tw=textW(T,tag)+4,hot=tag==='ARM'||tag.startsWith('REC');
+    xr-=tw+2;rect(b,xr+2,1,tw,lh-1,hot?15:7);text(b,T,tag,xr+4,base-1,0);}
+  const live=isLive(),name=live?'LIVE':s&&s.file?s.file:'- empty -';
+  text(b,M,fit(M,name,xr-x),x,base,live?15:s&&s.file?11:5);
   hline(b,0,W-1,lh+2,4);
   return lh+4;}
 // status line (tiny): page dots + NAME ······ right-hint   -> returns its top y
@@ -420,6 +436,59 @@ function vSetup(b){const {T,M}=fs(),top=header(b),u=st.setup;
   const [name,g]=SETUP_GROUPS[u.g],items=gItems(g),e=items[u.cur];
   const bot=status(b,'SETUP>'+name,st.edit?'PUSH OK':e&&e.panel||'PUSH EDIT');
   sList(b,g,items,u.cur,top,bot,true);}
+// ---------- the recorder (M_.rec: phase / take / fill / size in frames @48k, free sounds) ----------
+// FILE > RECS > RECORD: state + time + the actions that make sense now; tag in the header.
+const REC_RATE=48000;
+function rec(){return M_&&M_.connected&&M_.rec||null;}
+function recSecs(fr){const t=Math.floor(Math.max(0,fr)*10/REC_RATE);return Math.floor(t/10)+'.'+t%10+'s';}
+function recWhole(fr){return Math.floor(Math.max(0,fr)/REC_RATE)+'s';}
+function recTag(){const r=rec();if(!r)return null;
+  return {armed:'ARM',rec:'REC '+recWhole(r.take),pending:'TAKE',frozen:'FRZ',wait:'WAIT'}[r.phase]||null;}
+const REC_WORD={idle:'STOPPED',listen:'LISTENING',armed:'ARMED',rec:'RECORDING',pending:'TAKE',
+  loop:'LOOPING',wait:'WAITING',frozen:'FROZEN'};
+// [label, action, sound, needs a 2nd push]
+function recItems(){const r=rec();if(!r)return [];const p=r.phase,it=[];
+  if(p==='pending'){it.push(['SAVE TO RECS','save']);
+    for(const n of r.free)it.push(['SAVE TO S'+(n+1),'assign',n]);
+    it.push(['DISCARD','discard',null,true]);}
+  else if(r.mode===2){it.push([p==='frozen'?'UNFREEZE':'FREEZE','press']);it.push(['KEEP LOOP','grab']);}
+  else if(p==='armed')it.push(['CANCEL','press']);
+  else if(p==='rec')it.push(['STOP','press']);
+  else{it.push(['START','press']);
+    if((r.state===1||r.state===3)&&r.fill>=4800)it.push(['GRAB LAST '+recWhole(r.fill),'grab']);}
+  return it;}
+function recSync(){const r=rec(),p=r?r.phase:null;      // new state: cursor back to the top
+  if(p!==st.recPhase){st.recPhase=p;st.recCur=0;st.recArmed=null;}
+  st.recCur=clamp(st.recCur,0,Math.max(0,recItems().length-1));}
+function vRec(b){const {T,M,L}=fs(),top=header(b),r=rec();recSync();
+  const bot=status(b,'RECORD',st.recArmed!=null?'PUSH AGAIN':'PUSH OK');
+  if(!r)return;
+  const p=r.phase,fr=p==='rec'||p==='pending'?r.take:p==='armed'?0:r.fill;
+  let y=top+1;
+  text(b,M,REC_WORD[p]||p,2,y+fm.asc(M),p==='rec'||p==='armed'?15:12);
+  textR(b,T,r.mode===2?'LOOPER':r.mode===1?'RESAMPLE':'INPUT',W-2,y+fm.asc(M),8);
+  y+=fm.lh(M)+1;
+  text(b,L,recSecs(fr),2,y+fm.asc(L),15);
+  textR(b,T,'/ '+recWhole(r.size),W-2,y+fm.asc(L),8);
+  y+=fm.lh(L)+2;
+  rect(b,2,y,W-4,3,3);
+  if(r.size>0)rect(b,2,y,Math.floor((W-4)*Math.min(fr,r.size)/r.size),3,p==='rec'?15:10);
+  y+=6;
+  const it=recItems(),rh=fm.lh(M)+2,rows=Math.max(1,Math.floor((bot-y)/rh)),
+        first=Math.max(0,Math.min(st.recCur-(rows>>1),it.length-rows));
+  for(let k=0;k<rows&&first+k<it.length;k++){const i=first+k,yy=y+k*rh,on=i===st.recCur;
+    if(on)rect(b,0,yy,W,rh,15);text(b,M,it[i][0],2,yy+1+fm.asc(M),on?0:12);}}
+function openRec(){st.overlay='REC';st.menu=null;st.recPhase=null;recSync();}
+async function recPush(){const it=recItems()[st.recCur];if(!it)return;
+  const [,action,n,confirm]=it;
+  if(confirm&&st.recArmed!==st.recCur){st.recArmed=st.recCur;return;}
+  st.recArmed=null;
+  try{await api('/rec',n==null?{action}:{action,sound:n});
+    if(action==='save')flash('TO RECS','SAVING');
+    else if(action==='assign')flash('TO S'+(n+1),'SAVING');
+    else if(action==='discard')flash('DISCARDED','TAKE');}
+  catch(e){flash(e.message);}
+  render();}
 function isStore(f=st.folder){return f==='PRESETS'||f==='PROJECTS';}
 function store(){return (M_&&M_.store)||{projects:[],presets:[],locked:[],project:null,preset:null};}
 // one slot row: NN name ...... tags  (empty slots dim)
@@ -445,16 +514,20 @@ function rootRow(b,y,rh,f,on){const {T,M}=fs(),S=store(),s=snd();
   const n=isStore(f)?(f==='PRESETS'?S.presets:S.projects).length:st.rootCounts[f],
         tag=(s&&s.folder===f?'CUR ':'')+(n==null?'':n),ty=y+fm.asc(M)-(fm.asc(M)-fm.asc(T));
   text(b,M,'/'+FNAME[f],2,y+fm.asc(M),on?0:12);textR(b,T,tag.trim(),W-2,ty,on?0:8);}
-// list rows run from -1 ('..' = up to the root; not at the root itself)
-function fileLo(){return st.folder==='ROOT'?0:-1;}
+// list rows run from -1 ('..' = up to the root; not at the root itself); Recs: -2 '..',
+// -1 RECORD (the recorder screen)
+function fileLo(){return st.folder==='ROOT'?0:st.folder==='Recs'?-2:-1;}
 function vFile(b){const {M}=fs(),top=header(b),F=st.files,root=st.folder==='ROOT';
   const bot=status(b,'FILE /'+(root?'':FNAME[st.folder]||''),
     root||!F.length||st.fileCur<0?'':(st.fileCur+1)+'/'+F.length);
   const rh=fm.lh(M)+1,rows=Math.floor((bot-top)/rh),lo=fileLo(),n=F.length-lo;
   const first=lo+Math.max(0,Math.min(st.fileCur-lo-(rows>>1),n-rows));
   for(let r=0;r<rows&&first+r<F.length;r++){const i=first+r,y=top+r*rh,on=i===st.fileCur;
-    if(i<0){if(on)rect(b,0,y,W,rh,15);text(b,M,'..',2,y+fm.asc(M),on?0:9);
-      if(!F.length)text(b,M,M_&&M_.sd_state===3?'SD error':st.filesOk?'empty folder':'loading list...',2,y+rh+fm.asc(M)+2,8);
+    if(i<0){if(on)rect(b,0,y,W,rh,15);
+      if(i===lo)text(b,M,'..',2,y+fm.asc(M),on?0:9);
+      else{const {T}=fs(),tag=recTag()||'';text(b,M,'RECORD',2,y+fm.asc(M),on?0:15);
+        textR(b,T,tag,W-2,y+fm.asc(T)+(fm.asc(M)-fm.asc(T)),on?0:8);}
+      if(i===-1&&!F.length)text(b,M,M_&&M_.sd_state===3?'SD error':st.filesOk?'empty folder':'loading list...',2,y+rh+fm.asc(M)+2,8);
       continue;}
     if(root){rootRow(b,y,rh,F[i],on);continue;}
     if(isStore()){slotRow(b,y,rh,i,on);continue;}
@@ -526,7 +599,8 @@ async function mirSend(){mir.busy=true;                  // one request in fligh
     try{await fetch('/frame',{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:f});}
     catch(e){mir.last=null;break;}}
   mir.busy=false;}
-const PICO_BTN={BACK:'BACK',VIEW:'VIEW',FILE:'FILE','SOUND<':'SOUNDL','SOUND>':'SOUNDR','A/B':'SCENE',SETUP:'SETUP'};
+const PICO_BTN={BACK:'BACK',VIEW:'VIEW',FILE:'FILE','SOUND<':'SOUNDL','SOUND>':'SOUNDR','A/B':'SCENE',SETUP:'SETUP',
+  LIVE:'LIVE'};                         // LIVE = the Pico's SOUND< + SOUND> chord
 function picoKeys(){if(EMBED)return;
   new EventSource('/events').onmessage=e=>{const m=JSON.parse(e.data);
     if(m.t==='enc')for(let i=0;i<Math.abs(m.d);i++)enc(Math.sign(m.d));
@@ -540,6 +614,7 @@ function linkMsg(){return !M_?'NO SERVER':M_.fw==='checking'?'CHECKING FIRMWARE'
 const cv=document.getElementById('oled');
 function render(){const b=fb();
   if(st.overlay==='FILE')vFile(b);
+  else if(st.overlay==='REC')vRec(b);
   else if(st.overlay==='SETUP')vSetup(b);
   else if(touchActive())vTouch(b);
   else ({WAVE:vWave,PARAM:vParm,MOD:vMod,SETTINGS:st.quant&&snd()?vQuant:vSet}[st.view])(b);
@@ -564,6 +639,7 @@ function enc(d){const u=st.setup;
   else if(st.overlay==='SETUP'&&u.g==null)u.gc=clamp(u.gc+d,0,SETUP_GROUPS.length-1);
   else if(st.overlay==='SETUP')u.cur=clamp(u.cur+d,0,gItems(SETUP_GROUPS[u.g][1]).length-1);
   else if(st.overlay==='FILE'&&st.menu){st.menu.cur=clamp(st.menu.cur+d,0,st.menu.items.length-1);st.menu.armed=null;}
+  else if(st.overlay==='REC'){st.recCur=clamp(st.recCur+d,0,Math.max(0,recItems().length-1));st.recArmed=null;}
   else if(st.overlay==='FILE')st.fileCur=clamp(st.fileCur+d,fileLo(),Math.max(fileLo(),st.files.length-1));
   else if(st.view==='SETTINGS'&&st.dived)st.setCur=clamp(st.setCur+d,0,gItems('sound').length-1);
   else st.view=VIEWS[clamp(VIEWS.indexOf(st.view)+d,0,VIEWS.length-1)];  // page views (clamped)
@@ -575,7 +651,9 @@ function push(){const u=st.setup;
   else if(st.overlay==='SETUP'&&u.g==null){if(SETUP_GROUPS[u.gc][1]){u.g=u.gc;u.cur=0;}else flash('coming soon');}
   else if(st.overlay==='SETUP'){const g=SETUP_GROUPS[u.g][1];editStart(g,gItems(g)[u.cur]);}
   else if(st.overlay==='FILE'&&st.menu)menuPush();
-  else if(st.overlay==='FILE'&&st.fileCur<0)openRoot(st.folder);
+  else if(st.overlay==='REC')recPush();
+  else if(st.overlay==='FILE'&&st.fileCur===fileLo()&&st.folder!=='ROOT')openRoot(st.folder);
+  else if(st.overlay==='FILE'&&st.fileCur<0)openRec();
   else if(st.overlay==='FILE'&&st.folder==='ROOT')openFiles(st.files[st.fileCur]);
   else if(st.overlay==='FILE'&&isStore())openMenu();
   else if(st.overlay==='FILE')doLoad();
@@ -588,6 +666,7 @@ function btn(n){
   if(['VIEW','FILE','SETUP'].includes(n))st.quant=null;               // ...and the keyboard page
   if(n==='BACK'){ if(st.edit)st.edit=null; else if(st.menu)st.menu=null;
     else if(st.quant&&!st.overlay){ if(st.quant.edit)st.quant.edit=null; else st.quant=null; }
+    else if(st.overlay==='REC')openFiles('Recs');            // (its list: new takes)
     else if(st.overlay==='FILE'&&st.folder!=='ROOT')openRoot(st.folder);
     else if(st.overlay==='SETUP'&&st.setup.g!=null)st.setup.g=null;
     else if(st.overlay)st.overlay=null; else if(st.dived)st.dived=false; else st.view='WAVE'; }
@@ -596,6 +675,7 @@ function btn(n){
   else if(n==='SCENE')selectScene(st.scene==='A'?'B':'A');
   else if(n==='SOUNDL')selectSound((st.sound+7)%8);
   else if(n==='SOUNDR')selectSound((st.sound+1)%8);
+  else if(n==='LIVE')liveToggle();
   else if(n==='SETUP'){ if(st.overlay==='SETUP')st.overlay=null;   // SETUP again = close
     else{st.overlay='SETUP';st.menu=null;st.setup={g:null,gc:0,cur:0};} }
   else if(n==='FILE')openFiles(st.overlay==='FILE'?FOLDERS[(FOLDERS.indexOf(st.folder)+1)%FOLDERS.length]:undefined);  // root -> first folder
@@ -680,7 +760,7 @@ document.addEventListener('keydown',e=>{if(e.target.tagName==='INPUT')return;con
   else if(e.key==='ArrowDown'||e.key==='ArrowRight'){enc(1);e.preventDefault();}
   else if(e.key==='Enter'||e.key===' '){push();e.preventDefault();}
   else if(e.key==='Escape')btn('BACK');
-  else if(k===',')btn('SOUNDL'); else if(k==='.')btn('SOUNDR');
+  else if(k===',')btn('SOUNDL'); else if(k==='.')btn('SOUNDR'); else if(k==='l')btn('LIVE');
   else if(k==='b')btn('SCENE'); else if(k==='f')btn('FILE'); else if(k==='v')btn('VIEW');
   else if(k==='s')btn('SETUP');});
 cv.addEventListener('wheel',e=>{enc(e.deltaY>0?1:-1);e.preventDefault();},{passive:false});

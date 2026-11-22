@@ -5,9 +5,116 @@ Multigrain** (3U granular sampler) — it's hard to use without a screen and the
 audio-file workflow is confusing. This file is the single place to pick the
 project back up if I lose the chat session.
 
-_Last updated: 2026-10-21._
+_Last updated: 2026-10-29._
 
 ---
+
+## Update 2026-10-29 — every setting editable ✅ (sound + module + preset, hardware-tested)
+
+- **Mapped** (docs/SETTINGS.md "The records"): read every setting's record off the live module
+  (read-only) + the .bin. Each is `vptr` · std::function · value; u8 value at rec+0x15 (default
+  / min / max around it), f32 at rec+0x18 (min / max +0x1c / +0x20), Quantizer u16 at rec+0x14.
+  The setter is one template everywhere (store, then call the callback); the callbacks only mark
+  Settings.mgs (`st+0x10`) or the project (`st+0x11`) changed, + Knob mode / Gate delay / Theme
+  push the value to the panel. Choke / Gate: no callback (the panel only stores them).
+- **Settled on the way:** Quantizer **root = bits 12-15 of the notes u16** (the reader took a
+  float at +0x56c: wrong); Fine tune raw −1..1 = ±7 st (it was shown raw as st); SELECT range raw
+  = multiplier 1..8.571, shown 5 V / raw; Gate delay u8 0-10 ms (was "not mapped"); Theme is
+  editable (its callback swaps the palette); Mod out A/B = a 2-byte array + one callback.
+- **Write** = the setter's two steps (the float setter takes s0, which our call helper doesn't
+  set): check the record (invoker = catalogue `inv`), clamp floats to the record's range, store,
+  call the invoker `(&functor, &value)` - one idle-loop halt. No callback → project dirty.
+  `tools/mg_set.py` (CLI, `--swd pico`; the server's live `POST /setting`), `pico/mgset.py`
+  (main.py action `("set", key, value, sound)`). Catalogue `gv_settings.json` `ram`: `fn`, `inv`,
+  `scale` / `recip`, type `u8`; gen_pico_map rows changed (`fn, inv, …, scale, recip`).
+- **UI** (Pico + emulator): the "read-only (live)" gate is gone - SETTINGS rows, SETUP > MODULE /
+  PRESET edit with push / turn / push; **quantizer keyboard page ported to the Pico** (`v_quant`,
+  `q_enc` / `q_push`; ROOT transposes, QUANT ON). Test hooks `_quant`, `_dived` + `_edit`.
+- **Checked:** parity `--cases` **394 frames MATCH** (+8 quantizer pages, row edits, SETUP edits);
+  Pico snapshot = Mac decode. **Hardware, scratch Project27:** all 24 writes through the Pico
+  (mg_set + PicoTarget) → read back + the right dirty flag, ~30 ms each, restored; then **on the
+  Pico itself** (the UI's own key flow → its action → mgset.write → fresh poll): Choke, Fine
+  tune, quantizer note + root transpose, SETUP Knob mode, Mod out B - all OK, restored. Module
+  back on Project26, global settings as before.
+- **Open:** Mod out A/B option order - a new project reads A = 0, B = 1, but the manual's
+  defaults are TRIG / ENV, so raw 0 may be TRIG (catalogue says MORPH): check the ALT page LEDs.
+  Not done: copy quantizer to other sounds / apply to all (p.33); SAMPLE settings.
+
+## Update 2026-10-22 — the RECORDER ✅ (FILE > RECS > RECORD, hardware-tested)
+
+- **Calls** (docs/RECORDER.md §4, each checked against the decompile first): the Home page's
+  own handlers with a FIXED argument - SAMPLE click `FUN_08033ab0(home, 0)` (start / stop /
+  disarm / save / looper freeze), SAMPLE long `FUN_080331ac(home, 0)` (Always-Listening grab /
+  keep the loop), SOUND down `FUN_08034a70(home, n)` (save + assign), the Clear page's SAMPLE
+  (arm +8 = 0, `FUN_0803240c(clr, 0)`, leave `FUN_080314a0()`) = discard. Guards: module on its
+  Home page, SD idle, no save queued, save-blink 0 (a save within ~1.2 s is ignored by the
+  firmware), and the state where that handler does what we want (else: Advanced Sampling page
+  = playback paused; SOUND = select / copy sounds; another argument = THRU / LATCH / presets).
+- **`tools/mg_rec.py`**: `rec_status` / `rec_snapshot` (phase from R+0x28 + take: idle / listen /
+  armed / rec / pending; looper loop / wait / frozen), `rec_do(press|save|grab|assign|discard)`,
+  `--rec ...`. **Hardware-tested in Project27** (calls, then through the Pico's UI): start →
+  stop → save (Rec00001), → assign to empty S1 / S3 (Rec00002 / 04), discard, grab (Rec00005),
+  looper freeze / unfreeze / keep loop → save (Rec00003 / 06). Recs list + count update in place.
+- **GRAINVIEW:** RECS folder rows = `..`, **RECORD**, the takes. RECORD screen: state word (+
+  INPUT / RESAMPLE / LOOPER), time (take, or the memory: Always Listening / the loop) big, fill
+  bar, then only the actions that make sense now: START + GRAB LAST ns / CANCEL / STOP / SAVE TO
+  RECS + SAVE TO Sn (empty sounds) + DISCARD (2nd push) / FREEZE|UNFREEZE + KEEP LOOP. Header tag
+  on every view: `REC 12s` / `ARM` (bright), `TAKE` / `FRZ` / `WAIT`. Snapshot `rec` (Pico
+  `mgpoll.rec`: one 260-byte read R + the slots, + the live mask), action `("rec", action, n)`
+  (`pico/mgrec.rec_do`), server `POST /rec`, mock recorder for offline UI work.
+- Parity **371 frames MATCH** (+ tag ×4 views, 16 RECORD states, RECS rows). Pico snapshot =
+  Mac decode. Poll ~58 ms.
+- **USB hang (2026-10-22):** once the Pico's USB serial stopped answering while main.py ran on
+  (WAVE animating, WiFi fine) - cause unknown, power cycle fixed it. Watch for it.
+- **Lag fix (Leo, 2026-10-22: "really laggy ... frozen" in FILE):** not the recorder - FILE
+  /PROJECT in Project01 has 35-49 char names and `gv_draw.fit()` shortened them one char at a
+  time, re-measuring the whole name each time (~1000 glyph lookups a row, 7 rows, every redraw =
+  after every poll): main loop **1.5 passes/s**, USB round trip 1.1 s. Now one pass (same result:
+  200k random cases vs the old one); same screen **206 loops/s**, round trip 0.22 s, parity 371.
+  (`gv_pico.py` op `P` = the loop counters: the quickest way to see a slow main loop.)
+- Not done: trimming (Advanced Sampling page), THRSH / GAIN / RESAMP settings (SETUP > SAMPLE
+  is still "soon"), WAVE for a Live Sound (still draws the WAV).
+
+## Update 2026-10-21 (later night) — Live Sounds ✅ (toggle per sound, hardware-tested)
+
+- **Live Sound vs Looping Recorder:** a Live Sound is a per-sound flag (grains from the input,
+  not a WAV); the Looping Recorder is the module's one recorder in loop mode (8-32 s Live
+  Memory). Any Live Sound forces the looper on; the looper can also run alone (RESAMP magenta).
+- **Offline RE** (`docs/RECORDER.md`, Live first, then the whole recorder): flag u8 sound+0x945 =
+  value byte of a reactive record at +0x930 (vtable 0x0805C668). Its **setter `0x0800C320(rec, v)`
+  must be called**: the callback keeps the live mask (state+0x40 = 0x20008C9C, bit n), switches
+  the recorder to looper (mode u8 0x20000454 = 2) on the first Live Sound and back on the last,
+  and sets autosave. An empty sound also gets the Settings' default Live Sound / Sound record
+  (`FUN_08012494(n, v)`), as the panel does. Checked against the .bin before calling.
+- **`tools/mg_rec.py`** (status / `--live N on|off`, `--swd pico` = through GRAINVIEW, no
+  ST-Link) **hardware-tested** in a new scratch **Project27** (Project26 saved + untouched):
+  empty S1 on → looper, mask 0x01 → off → sample; S2 with a /Wavs WAV on/off keeps its file +
+  folder. Poll healthy after each.
+- **GRAINVIEW:** SETTINGS > **Type** (SAMPLE / LIVE) is the first setting writable on a live
+  module (`LIVE_EDIT`); **SOUND‹ + SOUND› together** = toggle Live on the focused sound (main.py
+  `snd_key`: a lone SOUND key now acts on **release**, the Mac hears the resolved key, `@B LIVE`);
+  header shows **LIVE** instead of the file; box "S2 / LIVE". Pico `pico/mgrec.py`, action
+  `("live", n, v)`; server `POST /setting` sound `type` → `mg_rec.set_live`; emulator **L** key.
+  **Tested on hardware through the Pico's own UI** (WiFi keys: VIEW×3, PUSH, PUSH, +1, PUSH →
+  S2 LIVE, looper on). Parity **327 frames MATCH** (+ `live`, `flashLive`).
+- **Fixed on the way:** a 38 KB test packet (turn cases' `_prev`) hit a MemoryError right after
+  boot and killed the screen (twice; leftover bytes then wedged the REPL → power cycle).
+  `swd_packet` now drains an unallocatable packet and replies "packet too big for the heap"
+  (tested with 64 KB); `_prev` trimmed to what the detection reads. No-link parity cases now pass
+  the edited scene (`_scene`), so they match when the module sits on scene B.
+- **Leo, 2026-10-22: chord works on the panel, SAMPLE LED went magenta** (looper on) ✅.
+- **Fixed 2026-10-22 (Leo's reports):** (1) the chord also moved the sound: it ended on the
+  first release by reading the other key's *raw* pin, so letting go of both at once made the
+  second release a lone press - now the debounced state + a lone release only finishes its own
+  press (orders simulated on the Mac). (2) Then the header didn't follow on WAVE until a view
+  change: WAVE's cached background key lacked Live (the sound move had hidden it) - added
+  (before `hot`, which wave_live reads as the key's last item). (3) Found on the way: the
+  forced settings re-read after a toggle threw the cache away (`st = None`) and so lost the
+  module / preset groups until they changed - now `st_for = None`. Parity can't see (2): the
+  scripted renders reset the cache.
+- Not done: the WAVE view still draws the WAV's
+  waveform for a Live Sound; the web panel can't chord (use SETTINGS); recorder (start/stop,
+  save, assign, looper freeze) is mapped offline in docs/RECORDER.md, not built.
 
 ## Update 2026-10-21 (night) — WiFi remote panel ✅ (grainview.local)
 

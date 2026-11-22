@@ -453,6 +453,8 @@ def ui_cases(snap):
         s["sync"] = 1
     def long_name(s, d):
         d["file"] = "a_really_long_sample_name_for_the_header.wav"
+    def live(s, d):                           # a Live Sound: LIVE in the header
+        d.setdefault("settings", {})["type"] = 1
     def edges(s, d):                          # extreme knob values
         for sc in "AB":
             for i, k in enumerate(d[sc]):
@@ -473,7 +475,8 @@ def ui_cases(snap):
             s["_rand"] = [round(rng.random(), 4) for _ in range(1200)]
         return fn
     out = [(name, case(fn)) for name, fn in (("mods", mods), ("sceneB", scene_b), ("empty", empty),
-           ("unlinked", unlinked), ("sync", sync), ("longname", long_name), ("edges", edges))]
+           ("unlinked", unlinked), ("sync", sync), ("longname", long_name), ("edges", edges),
+           ("live", live))]
     shapes = (0.0, 0.2, 0.4, 0.55, 0.75, 0.9, 1.0)   # BELL SINC TRI DECAY RAMP TUKEY SQUARE
     out += [("grains%d" % i, case(grains(p={"SHAPE": v, "SCAN": 0.3, "LEVEL": 0.8})))
             for i, v in enumerate(shapes)]
@@ -508,7 +511,10 @@ def ui_cases(snap):
                     d[sc][k] = round(d[sc][k] + dv, 4)
             if sound is not None:
                 before["selected"] = sound
-            s["_prev"] = [before, copy.deepcopy(before)]
+            before = {k: before[k] for k in ("connected", "selected", "edit_scene")} | {
+                "sounds": [{k: x[k] for k in ("A", "B", "mod")} for x in before["sounds"]]}
+            s["_prev"] = [before, copy.deepcopy(before)]   # (just what the detection reads:
+                                                           # the Pico has to hold it in one piece)
         return fn
     out += [("turn" + name, case(fn)) for name, fn in (
         ("Size", turned(("SIZE", None, 0.02))),
@@ -534,6 +540,27 @@ def ui_cases(snap):
         ("Chrom", settings(6, quantizer={"notes": notes(*range(12)), "root": 5})),
         ("Unmapped", settings(3, link_sp=None, choke=None)))]
 
+    def edit(cur, v, **vals):                 # SETTINGS dived, row cur being edited
+        def fn(s, d):
+            settings(cur, **vals)(s, d)
+            s["_edit"] = v
+        return fn
+
+    def quant(cur, ed=None, q=None, mode=0):  # SETTINGS > Quantizer open
+        def fn(s, d):
+            d["settings"].update(quant_mode=mode, **({"quantizer": q} if q else {}))
+            s["_quant"] = [cur, ed]
+        return fn
+    maj_d = {"notes": notes(2, 4, 6, 7, 9, 11, 1), "root": 2}
+    out += [("set" + name, case(fn)) for name, fn in (
+        ("EditFine", edit(5, -1.5, fine_tune=2.3)), ("EditChoke", edit(8, 1, choke=0)),
+        ("QNote", quant(4, q=maj_d)), ("QBlack", quant(3, q=maj_d)),
+        ("QRoot", quant(12, q=maj_d)), ("QMode", quant(13, q=maj_d, mode=1)),
+        ("QRootEdit", quant(12, {"q": {"notes": notes(3, 5, 7, 8, 10, 0, 2), "root": 3}}, q=maj_d)),
+        ("QModeEdit", quant(13, {"mode": 1}, q=maj_d)),
+        ("QOff", quant(0, q={"notes": notes(), "root": 0})),
+        ("QOdd", quant(2, q={"notes": notes(2, 3), "root": 2})))]
+
     def setup(g, gc, cur=0, edit=None, gv=None, **vals):   # SETUP overlay open there
         def fn(s, d):
             s["_setup"] = [g, gc, cur]
@@ -549,7 +576,8 @@ def ui_cases(snap):
         ("Gv", setup(None, 3)),
         ("Mod", setup(0, 0)), ("ModMid", setup(0, 0, 5)), ("ModEnd", setup(0, 0, 10)),
         ("ModUnmapped", setup(0, 0, 1, module={"next_input": None, "gate_delay": None})),
-        ("ModEdit", setup(0, 0, 3, edit=2.5)),
+        ("ModEdit", setup(0, 0, 3, edit=3)), ("ModEditSel", setup(0, 0, 4, edit=0.85)),
+        ("ModTheme", setup(0, 0, 10, edit=2)), ("PreEdit", setup(1, 1, 0, edit=4)),
         ("Pre", setup(1, 1, 2)), ("GvTop", setup(3, 3)), ("GvLink", setup(3, 3, 4)),
         ("GvFw", setup(3, 3, 5)), ("GvEdit", setup(3, 3, 1, edit=0)),
         ("GvEditOn", setup(3, 3, 0, edit=1)),
@@ -587,10 +615,44 @@ def ui_cases(snap):
         ("MenuEmpty", files("PRESETS", 3, store=shelf, menu=[0, None])),
         ("MenuProjectCur", files("PROJECTS", 2, store=shelf, menu=[0, None])),
         ("MenuProjectOpen", files("PROJECTS", 7, store=shelf, menu=[1, None])))]
+    def rec(phase, cur=None, armed=None, mode=0, state=None, take=0, fill=0, size=1536000,
+            free=(3, 7)):                     # the recorder in that state (+ RECORD open there)
+        st = state if state is not None else {"idle": 0, "listen": 3, "armed": 5, "rec": 6,
+                                              "pending": 0, "loop": 3, "wait": 1, "frozen": 0}[phase]
+        def fn(s, d):
+            s["rec"] = {"mode": mode, "state": st, "phase": phase, "take": take, "fill": fill,
+                        "size": size, "free": list(free)}
+            if cur is not None:
+                s["_rec"] = [cur, armed]
+        return fn
+    out += [("tag" + name, case(fn)) for name, fn in (       # the header, on every view
+        ("Rec", rec("rec", take=592000)), ("Take", rec("pending", take=96000)),
+        ("Armed", rec("armed")), ("Frozen", rec("frozen", mode=2, size=384000)))]
+    out += [("rec" + name, case(fn)) for name, fn in (
+        ("Listen", rec("listen", 0, fill=1013000)), ("ListenGrab", rec("listen", 1, fill=1013000)),
+        ("Idle", rec("idle", 0)), ("Armed", rec("armed", 0)),
+        ("Rec", rec("rec", 0, take=592123, fill=592123)),
+        ("RecFull", rec("rec", 0, take=1536000, fill=1536000)),
+        ("Take", rec("pending", 0, take=96000)), ("TakeAssign", rec("pending", 1, take=96000)),
+        ("TakeDiscard", rec("pending", 3, 3, take=96000)),
+        ("TakeAllFree", rec("pending", 9, take=96000, free=range(8))),
+        ("TakeNoFree", rec("pending", 1, take=96000, free=())),
+        ("Loop", rec("loop", 0, mode=2, fill=200000, size=384000)),
+        ("LoopKeep", rec("loop", 1, mode=2, fill=384000, size=384000)),
+        ("Frozen", rec("frozen", 0, mode=2, fill=384000, size=768000)),
+        ("Wait", rec("wait", 0, mode=2, fill=384000, size=384000)),
+        ("Resample", rec("listen", 0, mode=1, fill=48000)))]
+    recs = ["Rec%05d.wav" % i for i in range(1, 8)]
+    out += [("file" + name, case(fn)) for name, fn in (       # Recs: '..', RECORD, the takes
+        ("RecsRecord", files("Recs", -1, recs)), ("RecsUp", files("Recs", -2, recs)),
+        ("RecsEmpty", files("Recs", -1, [])),
+        ("RecsTag", lambda s, d: (files("Recs", -1, recs)(s, d), rec("rec", take=590000)(s, d))))]
     out += [("flashLoading", case(lambda s, d: s.update(_flash=["Kick 03.wav", "LOADING"]))),
-            ("flashPlain", case(lambda s, d: s.update(_flash=["SD busy", None])))]
-    off = {"mode": "swd", "connected": False, "error": "Multigrain off", "_sound": n}
-    chk, unk = ({"mode": "swd", "connected": False, "error": "x", "fw": fw, "_sound": n}
+            ("flashPlain", case(lambda s, d: s.update(_flash=["SD busy", None]))),
+            ("flashLive", case(lambda s, d: s.update(_flash=["LIVE", "S%d" % (n + 1)])))]
+    sc = snap.get("edit_scene") or "A"        # (the Pico keeps the last poll's sound + scene)
+    off = {"mode": "swd", "connected": False, "error": "Multigrain off", "_sound": n, "_scene": sc}
+    chk, unk = ({"mode": "swd", "connected": False, "error": "x", "fw": fw, "_sound": n, "_scene": sc}
                 for fw in ("checking", "unknown"))
     out += [("fwChecking", chk), ("fwUnknown", unk), ("setupFw", case(lambda s, d: s.update(_setup=[3, 3, 5]))),
             ("setupFwUnknown", {**unk, "_setup": [3, 3, 5]}), ("setupFwChecking", {**chk, "_setup": [3, 3, 5]})]
@@ -611,7 +673,8 @@ def ui_check(port, views, all_sounds=False, cases=False, k=3):
         live = json.loads(link.swd("S", timeout=5))
         for name, snap in ui_cases(live):     # an overlay case shows it on any view
             _ui_views(link, ["SETUP"] if "_setup" in snap else ["FILE"] if "_file" in snap
-                      else views, name + " ", k, snap)
+                      else ["SETTINGS"] if "_quant" in snap
+                      else ["WAVE"] if "_rec" in snap else views, name + " ", k, snap)
         return
     if not all_sounds:
         return _ui_views(link, views, "", k)

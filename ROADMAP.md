@@ -68,7 +68,7 @@ phone/desktop app. It does the SWD talking; the module is never modified.
       Guards: load/lock need the exists-bit (missing preset = blank sounds; missing project
       = new empty one), UI and SD project must match. Not done: delete `FUN_0801e834(n)`,
       Collect (`FUN_0801140c(n)`; firmware bug when n ≠ current leaves SD on project n).
-- [ ] Nice-to-haves: trigger record. (slot→file ✅ below)
+- [ ] Nice-to-haves: trigger record (→ Phase 3 "Recorder", docs/RECORDER.md). (slot→file ✅ below)
       ✅ slot→file: `tools/mg_slots.py` **hardware-verified 2026-10-12** (matched the
       file loaded the day before). +0x4f4 "missing" byte **CONFIRMED by offline RE
       2026-10-12**: the project/preset reload (`FUN_08012a3c`) sets it to 1 when a sound has a
@@ -187,6 +187,15 @@ web app over WiFi as an optional big-screen view.)
 - [x] Hardware: eurorack PCB + panel (KiCad, `hardware/`, docs/HARDWARE.md), 8 HP, bus
       power → 3.3 V, VTREF sense only (no back-power), SWD header to ribbon. Ordered from
       JLC 2026-10-14, v1.0 **built and running** the Pico UI (2026-10-20/21).
+- [x] **Live Sounds** (2026-10-21): SETTINGS > Type SAMPLE/LIVE writable + SOUND‹+SOUND› chord +
+      LIVE in the header; firmware's own setter (`tools/mg_rec.py`, `pico/mgrec.py`,
+      docs/RECORDER.md §1), hardware-tested through the Pico's UI.
+- [x] **Recorder** (2026-10-22): FILE > RECS > RECORD - start / stop / cancel, save to Recs or
+      an empty sound, discard, Always-Listening grab, looper freeze / keep loop; REC / TAKE / ARM /
+      FRZ tag in the header. Home page's own handlers (`tools/mg_rec.py`, `pico/mgrec.py`,
+      docs/RECORDER.md), hardware-tested through the Pico's UI.
+- [ ] Next ideas: SETUP > SAMPLE (THRSH, GAIN, RESAMP, looper size, normalize - mapped in
+      docs/SETTINGS.md), WAVE for a Live Sound (the loop / record head), trimming (Advanced page).
 - [x] **WiFi remote panel** (2026-10-21, decided over the full emulator/API): the Pico serves
       `pico/gv_web.html` at **grainview.local** (`pico/gvnet.py`) = the live OLED frames + the 7
       buttons + encoder, one UI state shared with the real panel. Home WiFi from `pico/wifi.json`
@@ -219,7 +228,8 @@ web app over WiFi as an optional big-screen view.)
   (Leo: keep for now; fallback idea = tabs shown briefly on VIEW/turn).
 - **Interaction model:** encoder turn = page views / navigate; push = dive-in /
   select; BACK = up a level; SOUND‹› & SCENE A/B are global (apply across views);
-  FILE opens the SD browser overlay. No long-press / chords (keep it obvious).
+  FILE opens the SD browser overlay. No long-press; **one chord (2026-10-21, Leo):
+  SOUND‹ + SOUND› = toggle the sound's Live mode** (lone SOUND keys act on release).
 - **Role (decided 2026-10-12):** display + file/sound/preset browser. GRAINVIEW
   never edits single params — the module's knobs do that; PARAM/MOD are views.
 - **Focus vs playback (decided 2026-10-11):** SOUND‹› moves *edit focus* only
